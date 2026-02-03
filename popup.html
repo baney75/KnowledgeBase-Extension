@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KnowledgeBase</title>
+  <link rel="stylesheet" href="styles/popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="logo">KB</div>
+        <div>
+          <h1>KnowledgeBase</h1>
+          <p class="subtitle">AI-ready Markdown</p>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="status" id="statusMessage" data-state="info">
+        <span class="status-dot" aria-hidden="true"></span>
+        <p id="statusText">Ready to capture the current page.</p>
+      </section>
+
+      <section class="primary-actions">
+        <button id="convertBtn" class="btn-primary">Save Page</button>
+        <button id="captureStudyBtn" class="btn-secondary">Study Capture</button>
+      </section>
+
+      <div class="progress" id="progressBar" aria-hidden="true">
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <span class="progress-label" id="progressLabel">0%</span>
+      </div>
+
+      <section class="save-card" id="saveCard" style="display: none;">
+        <div class="save-meta">
+          <div class="label">File</div>
+          <div id="fileName">-</div>
+          <div class="label">Words</div>
+          <div id="wordCount">-</div>
+          <div class="label">Hash</div>
+          <div id="contentHash">-</div>
+        </div>
+        <div class="save-actions">
+          <button id="copyBtn" class="btn-ghost">Copy Markdown</button>
+        </div>
+        <details class="preview" id="preview">
+          <summary>Preview</summary>
+          <div class="preview-content" id="previewContent"></div>
+        </details>
+      </section>
+
+      <section class="study-card" id="studyCard" style="display: none;">
+        <div class="section-header">
+          <h3>Study Pack</h3>
+          <span class="section-subtext">Screenshot + prompt</span>
+        </div>
+        <div class="study-grid">
+          <div class="study-preview">
+            <img id="studyPreview" alt="Captured problem preview" />
+          </div>
+          <div class="study-actions">
+            <button id="copyPromptBtn" class="btn-ghost">Copy Prompt</button>
+            <button id="copyImageBtn" class="btn-ghost">Copy Screenshot</button>
+          </div>
+        </div>
+        <div class="study-send">
+          <label for="destinationSelect">Send to</label>
+          <div class="study-send-row">
+            <select id="destinationSelect">
+              <option value="perplexity">Perplexity</option>
+              <option value="gemini">Gemini</option>
+              <option value="grok">Grok</option>
+            </select>
+            <button id="sendStudyBtn" class="btn-primary">Open + Copy</button>
+          </div>
+        </div>
+        <details class="study-prompt-details">
+          <summary>Show prompt</summary>
+          <div class="study-prompt" id="studyPrompt"></div>
+        </details>
+      </section>
+
+      <details class="panel">
+        <summary>Options</summary>
+        <div class="panel-body">
+          <div class="field">
+            <label for="baseFolder">Folder</label>
+            <input id="baseFolder" type="text" placeholder="KnowledgeBase" />
+            <p class="field-hint">Saved inside your Chrome Downloads folder.</p>
+          </div>
+          <div class="field checkbox">
+            <input type="checkbox" id="overwriteToggle" />
+            <label for="overwriteToggle">Overwrite files for the same URL</label>
+          </div>
+          <div class="field checkbox">
+            <input type="checkbox" id="skipUnchanged" />
+            <label for="skipUnchanged">Skip download if unchanged</label>
+          </div>
+          <div class="panel-actions">
+            <button id="refreshAllBtn" class="btn-ghost">Refresh Saved</button>
+            <button id="openDownloadsSettings" class="btn-ghost">Download Settings</button>
+          </div>
+          <div class="stats">
+            <div>
+              <span class="label">Saved</span>
+              <span id="savedCount">0</span>
+            </div>
+            <div>
+              <span class="label">Last refresh</span>
+              <span id="lastRefresh">-</span>
+            </div>
+          </div>
+        </div>
+      </details>
+    </main>
+  </div>
+
+  <script src="scripts/popup.js"></script>
+</body>
+</html>
