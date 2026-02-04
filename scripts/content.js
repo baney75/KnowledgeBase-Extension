@@ -40,6 +40,19 @@ const REMOVE_SELECTORS = [
 ];
 
 const NOISE_PATTERN = /(nav|footer|sidebar|advert|ads|promo|subscribe|cookie|modal|popup|banner|share|social|comment)/i;
+let protectedContentDetected = false;
+
+function extractMarkdownHeadings(markdown) {
+  const headings = [];
+  const lines = (markdown || '').split('\n');
+  for (const line of lines) {
+    const match = line.match(/^(#{1,6})\\s+(.*)$/);
+    if (match) {
+      headings.push({ level: match[1].length, text: match[2].trim(), slug: '' });
+    }
+  }
+  return headings;
+}
 
 function getMetaContent(name) {
   return document.querySelector(`meta[name="${name}"]`)?.content || '';
@@ -84,14 +97,22 @@ function findVitalSourceContent() {
   const mosaicBook = document.querySelector('mosaic-book');
   if (mosaicBook && mosaicBook.shadowRoot) {
     const iframe = mosaicBook.shadowRoot.querySelector('iframe');
-    if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
-      return { element: iframe.contentDocument.body, selector: 'mosaic-book iframe body' };
+    if (iframe) {
+      try {
+        if (iframe.contentDocument && iframe.contentDocument.body) {
+          return { element: iframe.contentDocument.body, selector: 'mosaic-book iframe body' };
+        }
+        protectedContentDetected = true;
+      } catch (error) {
+        protectedContentDetected = true;
+      }
     }
   }
   return null;
 }
 
 function findMainContent() {
+  protectedContentDetected = false;
   const vital = findVitalSourceContent();
   if (vital) return vital;
 
@@ -318,11 +339,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action !== 'extractContent') return;
 
   try {
+    const contentType = document.contentType || '';
+    const url = location.href;
+    const looksLikeMarkdown = contentType.includes('text/markdown')
+      || (contentType.includes('text/plain') && url.toLowerCase().endsWith('.md'));
+
+    if (looksLikeMarkdown) {
+      const rawMarkdown = document.body?.innerText || '';
+      const metadata = extractMetadata();
+      sendResponse({
+        success: Boolean(rawMarkdown.trim()),
+        markdown: rawMarkdown,
+        text: rawMarkdown,
+        headings: extractMarkdownHeadings(rawMarkdown),
+        title: document.title || 'markdown',
+        pageTitle: document.title || 'markdown',
+        url,
+        contentSelector: 'body',
+        meta: metadata,
+        rawMarkdown: true,
+        protectedContent: false
+      });
+      return true;
+    }
+
     const content = findMainContent();
     if (!content || !content.element) {
       sendResponse({
         success: false,
-        error: 'Could not find main content on this page.'
+        error: 'Could not find main content on this page.',
+        protectedContent: protectedContentDetected
       });
       return true;
     }
@@ -336,7 +382,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (!extracted.markdown || extracted.markdown.length < 50) {
       sendResponse({
         success: false,
-        error: 'No substantial content found on this page.'
+        error: 'No substantial content found on this page.',
+        protectedContent: protectedContentDetected
       });
       return true;
     }
@@ -355,7 +402,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       pageTitle,
       url: location.href,
       contentSelector: content.selector,
-      meta: metadata
+      meta: metadata,
+      protectedContent: protectedContentDetected
     });
   } catch (error) {
     sendResponse({

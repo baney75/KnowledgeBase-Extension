@@ -9,27 +9,40 @@
 <body>
   <div class="container">
     <header>
-      <div class="brand">
-        <div class="logo">KB</div>
-        <div>
-          <h1>KnowledgeBase</h1>
-          <p class="subtitle">AI-ready Markdown</p>
+      <div class="brand-row">
+        <div class="brand">
+          <div class="logo">KB</div>
+          <div>
+            <h1>KnowledgeBase</h1>
+            <p class="subtitle">AI-ready Markdown</p>
+          </div>
         </div>
+        <img class="header-illustration" src="images/header-illustration.png" alt="Knowledge graph illustration" />
       </div>
     </header>
 
     <main>
-      <section class="status" id="statusMessage" data-state="info">
+      <section class="status" id="statusMessage" data-state="info" role="status" aria-live="polite" aria-atomic="true">
         <span class="status-dot" aria-hidden="true"></span>
         <p id="statusText">Ready to capture the current page.</p>
       </section>
 
       <section class="primary-actions">
-        <button id="convertBtn" class="btn-primary">Save Page</button>
-        <button id="captureStudyBtn" class="btn-secondary">Study Capture</button>
+        <button id="convertBtn" class="btn-primary">
+          <span class="btn-icon" aria-hidden="true">
+            <img src="images/icon-save.png" alt="" />
+          </span>
+          <span>Save Page</span>
+        </button>
+        <button id="captureStudyBtn" class="btn-secondary">
+          <span class="btn-icon" aria-hidden="true">
+            <img src="images/icon-capture.png" alt="" />
+          </span>
+          <span>Study Capture</span>
+        </button>
       </section>
 
-      <div class="progress" id="progressBar" aria-hidden="true">
+      <div class="progress" id="progressBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true">
         <div class="progress-track">
           <div class="progress-fill" id="progressFill"></div>
         </div>
@@ -44,6 +57,8 @@
           <div id="wordCount">-</div>
           <div class="label">Hash</div>
           <div id="contentHash">-</div>
+          <div class="label">Mode</div>
+          <div id="captureMode">-</div>
         </div>
         <div class="save-actions">
           <button id="copyBtn" class="btn-ghost">Copy Markdown</button>
@@ -64,8 +79,18 @@
             <img id="studyPreview" alt="Captured problem preview" />
           </div>
           <div class="study-actions">
-            <button id="copyPromptBtn" class="btn-ghost">Copy Prompt</button>
-            <button id="copyImageBtn" class="btn-ghost">Copy Screenshot</button>
+            <button id="copyPromptBtn" class="btn-ghost">
+              <span class="btn-icon" aria-hidden="true">
+                <img src="images/icon-copy.png" alt="" />
+              </span>
+              <span>Copy Prompt</span>
+            </button>
+            <button id="copyImageBtn" class="btn-ghost">
+              <span class="btn-icon" aria-hidden="true">
+                <img src="images/icon-copy.png" alt="" />
+              </span>
+              <span>Copy Screenshot</span>
+            </button>
           </div>
         </div>
         <div class="study-send">
@@ -101,10 +126,33 @@
             <input type="checkbox" id="skipUnchanged" />
             <label for="skipUnchanged">Skip download if unchanged</label>
           </div>
+          <div class="field checkbox">
+            <input type="checkbox" id="screenshotFallback" />
+            <label for="screenshotFallback">Fallback to screenshot for protected pages</label>
+          </div>
+          <details class="field learning-needs">
+            <summary>Learning needs (select all that apply)</summary>
+            <div class="learning-needs-body">
+              <div class="checkbox-grid" id="learningNeeds">
+                <label><input type="checkbox" value="ADHD" /> ADHD</label>
+                <label><input type="checkbox" value="HFA/Autism" /> HFA/Autism</label>
+                <label><input type="checkbox" value="OCD" /> OCD</label>
+                <label><input type="checkbox" value="VSS (Visual Snow Syndrome)" /> VSS</label>
+                <label><input type="checkbox" value="Dyslexia" /> Dyslexia</label>
+                <label><input type="checkbox" value="Dyscalculia" /> Dyscalculia</label>
+                <label><input type="checkbox" value="Anxiety" /> Anxiety</label>
+                <label><input type="checkbox" value="Other (typed below)" /> Other (typed below)</label>
+              </div>
+              <input id="learningNeedsOther" class="learning-needs-other" type="text" placeholder="Other needs (optional)" aria-label="Other learning needs" />
+            </div>
+          </details>
           <div class="panel-actions">
+            <button id="importFileBtn" class="btn-ghost">Import PDF/MD</button>
+            <input id="importFileInput" type="file" accept="application/pdf,.pdf,.md,text/markdown,text/plain" hidden />
             <button id="refreshAllBtn" class="btn-ghost">Refresh Saved</button>
             <button id="openDownloadsSettings" class="btn-ghost">Download Settings</button>
           </div>
+          <p class="note">Saved files live locally in Downloads/KnowledgeBase for personal study only.</p>
           <div class="stats">
             <div>
               <span class="label">Saved</span>
