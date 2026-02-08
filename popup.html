@@ -55,6 +55,8 @@
           <div id="fileName">-</div>
           <div class="label">Words</div>
           <div id="wordCount">-</div>
+          <div class="label">Assets</div>
+          <div id="assetCount">-</div>
           <div class="label">Hash</div>
           <div id="contentHash">-</div>
           <div class="label">Mode</div>
@@ -62,6 +64,10 @@
         </div>
         <div class="save-actions">
           <button id="copyBtn" class="btn-ghost">Copy Markdown</button>
+          <button id="copyPathBtn" class="btn-ghost">Copy File Path</button>
+          <button id="copyAssetsBtn" class="btn-ghost" disabled>Copy Attachments</button>
+          <button id="copyAllPathsBtn" class="btn-ghost" disabled>Copy All Paths</button>
+          <button id="revealFileBtn" class="btn-ghost" disabled>Reveal in Folder</button>
         </div>
         <details class="preview" id="preview">
           <summary>Preview</summary>
@@ -110,6 +116,33 @@
         </details>
       </section>
 
+      <section class="embedded-card" id="embeddedCard" style="display: none;">
+        <div class="section-header">
+          <h3>Documents Found</h3>
+          <span class="section-subtext">Choose what to save</span>
+        </div>
+        <div class="embedded-list" id="embeddedList"></div>
+        <div class="embedded-actions-row">
+          <button id="embeddedSaveAllBtn" class="btn-primary">Save All</button>
+          <button id="embeddedSkipBtn" class="btn-ghost">Skip and Save Page</button>
+        </div>
+      </section>
+
+      <details class="panel" id="libraryPanel">
+        <summary>KnowledgeBase Library</summary>
+        <div class="panel-body">
+          <div class="field">
+            <label for="librarySearch">Search</label>
+            <input id="librarySearch" type="text" placeholder="Search by title, URL, or path" />
+          </div>
+          <div class="library-count">
+            <span class="label">Entries</span>
+            <span id="libraryCount">0 / 0</span>
+          </div>
+          <div class="library-list" id="libraryList"></div>
+        </div>
+      </details>
+
       <details class="panel">
         <summary>Options</summary>
         <div class="panel-body">
@@ -147,8 +180,8 @@
             </div>
           </details>
           <div class="panel-actions">
-            <button id="importFileBtn" class="btn-ghost">Import PDF/MD</button>
-            <input id="importFileInput" type="file" accept="application/pdf,.pdf,.md,text/markdown,text/plain" hidden />
+            <button id="importFileBtn" class="btn-ghost">Import File</button>
+            <input id="importFileInput" type="file" accept="application/pdf,.pdf,.md,text/markdown,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/msword,.doc,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx,application/vnd.ms-powerpoint,.ppt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,application/vnd.ms-excel,.xls" hidden />
             <button id="refreshAllBtn" class="btn-ghost">Refresh Saved</button>
             <button id="openDownloadsSettings" class="btn-ghost">Download Settings</button>
           </div>
@@ -168,6 +201,8 @@
     </main>
   </div>
 
+  <script src="scripts/vendor/jszip.min.js"></script>
+  <script src="scripts/vendor/pdf.min.js"></script>
   <script src="scripts/popup.js"></script>
 </body>
 </html>

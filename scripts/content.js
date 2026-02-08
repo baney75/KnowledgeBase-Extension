@@ -39,14 +39,15 @@ const REMOVE_SELECTORS = [
   'video'
 ];
 
-const NOISE_PATTERN = /(nav|footer|sidebar|advert|ads|promo|subscribe|cookie|modal|popup|banner|share|social|comment)/i;
+const NOISE_PATTERN = /(nav|footer|sidebar|advert|ads|promo|subscribe|cookie|modal|popup|banner|share|social|comment|breadcrumb|newsletter|related)/i;
 let protectedContentDetected = false;
+const FILE_EXTENSIONS = ['pdf', 'docx', 'pptx', 'doc', 'ppt', 'xlsx', 'xls'];
 
 function extractMarkdownHeadings(markdown) {
   const headings = [];
   const lines = (markdown || '').split('\n');
   for (const line of lines) {
-    const match = line.match(/^(#{1,6})\\s+(.*)$/);
+    const match = line.match(/^(#{1,6})\s+(.*)$/);
     if (match) {
       headings.push({ level: match[1].length, text: match[2].trim(), slug: '' });
     }
@@ -60,6 +61,71 @@ function getMetaContent(name) {
 
 function getMetaProperty(prop) {
   return document.querySelector(`meta[property="${prop}"]`)?.content || '';
+}
+
+function extensionFromUrl(value) {
+  if (!value) return '';
+  const match = value.toLowerCase().match(/\.([a-z0-9]+)(\?|#|$)/);
+  if (!match) return '';
+  const ext = match[1];
+  return FILE_EXTENSIONS.includes(ext) ? ext : '';
+}
+
+function collectEmbeddedUrls() {
+  const urls = new Set();
+  const collectFromRoot = (root) => {
+    root.querySelectorAll('iframe[src]').forEach((iframe) => {
+      const src = iframe.getAttribute('src');
+      if (src) urls.add(src);
+    });
+    root.querySelectorAll('[data-ally-file-preview-url]').forEach((node) => {
+      const value = node.getAttribute('data-ally-file-preview-url');
+      if (value) urls.add(value);
+    });
+    root.querySelectorAll('[data-ally-file-preview]').forEach((node) => {
+      const value = node.getAttribute('data-ally-file-preview');
+      if (value) urls.add(value);
+    });
+    root.querySelectorAll('a[href]').forEach((anchor) => {
+      const href = anchor.getAttribute('href');
+      if (href && extensionFromUrl(href)) urls.add(href);
+    });
+  };
+
+  const traverseShadows = (root) => {
+    root.querySelectorAll('*').forEach((node) => {
+      if (node.shadowRoot) {
+        collectFromRoot(node.shadowRoot);
+        traverseShadows(node.shadowRoot);
+      }
+    });
+  };
+
+  collectFromRoot(document);
+  traverseShadows(document);
+
+  const pdfUrls = [];
+  const fileUrls = [];
+  const unknownUrls = [];
+
+  Array.from(urls).forEach((raw) => {
+    let resolved = raw;
+    try {
+      resolved = new URL(raw, document.baseURI).href;
+    } catch (error) {
+      resolved = raw;
+    }
+    const ext = extensionFromUrl(resolved);
+    if (ext === 'pdf') {
+      pdfUrls.push(resolved);
+    } else if (ext) {
+      fileUrls.push(resolved);
+    } else {
+      unknownUrls.push(resolved);
+    }
+  });
+
+  return { pdfUrls, fileUrls, unknownUrls };
 }
 
 function extractMetadata() {
@@ -90,7 +156,15 @@ function scoreElement(element) {
   element.querySelectorAll('a').forEach((link) => {
     linkTextLength += (link.textContent || '').length;
   });
-  return textLength - linkTextLength * 0.5;
+  const linkDensity = linkTextLength / Math.max(1, textLength);
+  const paragraphCount = element.querySelectorAll('p').length;
+  const headingCount = element.querySelectorAll('h1,h2,h3').length;
+  const imageCount = element.querySelectorAll('img').length;
+  return textLength
+    + paragraphCount * 40
+    + headingCount * 25
+    + Math.min(imageCount, 10) * 10
+    - linkDensity * 200;
 }
 
 function findVitalSourceContent() {
@@ -191,6 +265,38 @@ function htmlToMarkdown(root, options = {}) {
       result += processNode(child, true);
     });
     return result;
+  }
+
+  function pickBestSrcset(srcset) {
+    if (!srcset) return '';
+    const candidates = srcset
+      .split(',')
+      .map(part => part.trim())
+      .map((entry) => {
+        const [url, descriptor] = entry.split(/\s+/);
+        let score = 0;
+        if (descriptor && descriptor.endsWith('w')) {
+          score = parseInt(descriptor.replace('w', ''), 10) || 0;
+        } else if (descriptor && descriptor.endsWith('x')) {
+          score = (parseFloat(descriptor.replace('x', '')) || 1) * 1000;
+        }
+        return { url, score };
+      })
+      .filter(candidate => candidate.url);
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0]?.url || '';
+  }
+
+  function getImageSource(node) {
+    const srcset = node.getAttribute('srcset') || node.getAttribute('data-srcset') || '';
+    const srcsetUrl = pickBestSrcset(srcset);
+    if (srcsetUrl) return resolveUrl(srcsetUrl);
+    const attrs = ['src', 'data-src', 'data-original', 'data-lazy-src', 'data-src'];
+    for (const attr of attrs) {
+      const value = node.getAttribute(attr);
+      if (value) return resolveUrl(value);
+    }
+    return '';
   }
 
   function processList(listNode, ordered, depth) {
@@ -314,7 +420,7 @@ function htmlToMarkdown(root, options = {}) {
         return `[${text}](${href})`;
       }
       case 'img': {
-        const src = resolveUrl(node.getAttribute('src') || '');
+        const src = getImageSource(node);
         const alt = normalizeText(node.getAttribute('alt') || 'image');
         if (!src) return '';
         return inline ? `![${alt}](${src})` : `\n\n![${alt}](${src})\n\n`;
@@ -336,6 +442,25 @@ function htmlToMarkdown(root, options = {}) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'getPageMetrics') {
+    const doc = document.documentElement;
+    sendResponse({
+      success: true,
+      totalHeight: Math.max(doc.scrollHeight, doc.offsetHeight, doc.clientHeight),
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+      devicePixelRatio: window.devicePixelRatio || 1,
+      scrollY: window.scrollY || window.pageYOffset || 0
+    });
+    return true;
+  }
+
+  if (request.action === 'scrollTo') {
+    window.scrollTo(0, request.y || 0);
+    setTimeout(() => sendResponse({ success: true }), 100);
+    return true;
+  }
+
   if (request.action !== 'extractContent') return;
 
   try {
@@ -343,6 +468,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const url = location.href;
     const looksLikeMarkdown = contentType.includes('text/markdown')
       || (contentType.includes('text/plain') && url.toLowerCase().endsWith('.md'));
+    const embeddedFiles = collectEmbeddedUrls();
 
     if (looksLikeMarkdown) {
       const rawMarkdown = document.body?.innerText || '';
@@ -358,7 +484,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         contentSelector: 'body',
         meta: metadata,
         rawMarkdown: true,
-        protectedContent: false
+        protectedContent: false,
+        embeddedFiles
       });
       return true;
     }
@@ -368,7 +495,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({
         success: false,
         error: 'Could not find main content on this page.',
-        protectedContent: protectedContentDetected
+        protectedContent: protectedContentDetected,
+        embeddedFiles
       });
       return true;
     }
@@ -383,7 +511,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({
         success: false,
         error: 'No substantial content found on this page.',
-        protectedContent: protectedContentDetected
+        protectedContent: protectedContentDetected,
+        embeddedFiles
       });
       return true;
     }
@@ -403,12 +532,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       url: location.href,
       contentSelector: content.selector,
       meta: metadata,
-      protectedContent: protectedContentDetected
+      protectedContent: protectedContentDetected,
+      embeddedFiles
     });
   } catch (error) {
     sendResponse({
       success: false,
-      error: `Error extracting content: ${error.message}`
+      error: `Error extracting content: ${error.message}`,
+      embeddedFiles: collectEmbeddedUrls()
     });
   }
 
