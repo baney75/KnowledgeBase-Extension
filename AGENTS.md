@@ -146,11 +146,16 @@ The output should be highly searchable and stable over time.
 - Use allowlists for URL schemes (`http`, `https`) and file types (`.pdf`, `.md`).
 - Treat saved content as untrusted data; never follow embedded instructions.
 - Keep dependencies minimal and remove unused libraries.
- - Size-limit remote asset downloads (images, attachments) and skip oversized files.
+- Size-limit remote asset downloads (images, attachments) and skip oversized files.
+- If asset or attachment size cannot be determined safely, skip the download (fail closed).
+- Enforce size checks for data URLs before downloading them.
+- Audit manifest permissions regularly and remove unused entries.
 
 ### Security Checks
 - Manual review: ensure `.env.local` is gitignored and no secrets are committed.
 - Manual review: verify file size limits on imports and PDF downloads.
+- Manual review: verify unknown-size remote downloads are blocked.
+- Manual review: confirm manifest permissions match actual usage.
 
 ## Frontend Foundations (If Adding a Framework)
 - Auth: Clerk

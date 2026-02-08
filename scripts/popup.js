@@ -382,6 +382,24 @@ function parseDataUrlMime(dataUrl) {
   return match ? match[1] : '';
 }
 
+function estimateDataUrlBytes(dataUrl) {
+  if (!dataUrl) return null;
+  const commaIndex = dataUrl.indexOf(',');
+  if (commaIndex === -1) return null;
+  const meta = dataUrl.slice(0, commaIndex).toLowerCase();
+  const data = dataUrl.slice(commaIndex + 1);
+  if (!data) return 0;
+  if (meta.includes(';base64')) {
+    const padding = (data.match(/=+$/) || [''])[0].length;
+    return Math.max(0, Math.floor(data.length * 3 / 4) - padding);
+  }
+  try {
+    return decodeURIComponent(data).length;
+  } catch (error) {
+    return data.length;
+  }
+}
+
 function extensionFromMime(mimeType) {
   if (!mimeType) return '';
   const mime = mimeType.split(';')[0].trim().toLowerCase();
@@ -417,6 +435,7 @@ function replaceMarkdownImageUrls(markdown, replacements) {
 }
 
 async function fetchAssetHeaders(url) {
+  if (!isHttpUrl(url)) return null;
   try {
     const head = await fetch(url, { method: 'HEAD', credentials: 'include' });
     if (head.ok) return head;
@@ -437,12 +456,15 @@ async function fetchAssetHeaders(url) {
 }
 
 function getAssetSizeFromHeaders(headers) {
-  if (!headers) return 0;
-  const contentLength = Number(headers.get('content-length') || 0);
-  if (contentLength) return contentLength;
+  if (!headers) return null;
+  const contentLengthHeader = headers.get('content-length');
+  const contentLength = Number(contentLengthHeader || 0);
+  if (Number.isFinite(contentLength) && contentLength > 0) return contentLength;
   const contentRange = headers.get('content-range') || '';
   const match = contentRange.match(/\/(\d+)$/);
-  return match ? Number(match[1]) : 0;
+  if (!match) return null;
+  const rangeSize = Number(match[1]);
+  return Number.isFinite(rangeSize) && rangeSize > 0 ? rangeSize : null;
 }
 
 async function localizeMarkdownImages(markdown, pageInfo, overwrite) {
@@ -466,11 +488,21 @@ async function localizeMarkdownImages(markdown, pageInfo, overwrite) {
     let size = 0;
     if (isData) {
       mimeType = parseDataUrlMime(url);
+      size = estimateDataUrlBytes(url);
+      if (size === null) {
+        continue;
+      }
+      if (size > MAX_ASSET_BYTES) {
+        continue;
+      }
     } else {
       const headers = await fetchAssetHeaders(url);
       size = getAssetSizeFromHeaders(headers);
       mimeType = headers?.get('content-type') || '';
-      if (size && size > MAX_ASSET_BYTES) {
+      if (size === null) {
+        continue;
+      }
+      if (size > MAX_ASSET_BYTES) {
         continue;
       }
     }
@@ -2027,7 +2059,10 @@ async function downloadAttachmentWrapperFromUrl({ url, settings, title, extensio
 
   const headers = await fetchAssetHeaders(url.href);
   const size = getAssetSizeFromHeaders(headers);
-  if (size && size > MAX_IMPORT_BYTES) {
+  if (size === null) {
+    throw new Error('Attachment size unknown; download blocked for safety.');
+  }
+  if (size > MAX_IMPORT_BYTES) {
     throw new Error('File is too large to import safely.');
   }
 

@@ -17,3 +17,4 @@
 - 2026-02-06 Vendor JSZip + PDF.js to enable docx/pptx/xlsx and PDF text extraction inside the extension; fall back to attachment wrappers when extraction fails.
 - 2026-02-06 Split full-page screenshot captures into multiple images for very tall pages and list them in the Markdown assets section.
 - 2026-02-06 Use authenticated fetch for embedded docs and fall back to direct downloads when CORS/auth blocks extraction.
+- 2026-02-08 Fail closed when asset or attachment size is unknown, enforce data URL size limits, and remove unused manifest permissions.

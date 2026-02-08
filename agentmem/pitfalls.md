@@ -8,3 +8,4 @@
 - 2026-02-05 Regex escaping in JS regex literals can break file extension detection and image parsing; use single backslashes in regex literals.
 - 2026-02-06 Office extraction can fail on malformed files; always fall back to attachment wrappers instead of blocking the save flow.
 - 2026-02-06 PDF.js worker must be loaded via `GlobalWorkerOptions.workerSrc`; do not include the worker script directly in the popup HTML.
+- 2026-02-08 Some servers block HEAD/Range responses; treat unknown-size downloads as unsafe and skip them to avoid oversized attachments.
