@@ -1,0 +1,49 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: KB
+        - generic [ref=e7]:
+          - heading "KnowledgeBase" [level=1] [ref=e8]
+          - paragraph [ref=e9]: AI-ready Markdown
+      - img "Knowledge graph illustration" [ref=e10]
+  - main [ref=e11]:
+    - status [ref=e12]:
+      - paragraph [ref=e14]: "Preview mode: UI loaded without the Chrome extension runtime."
+    - generic [ref=e15]:
+      - heading "Capture" [level=2] [ref=e16]
+      - generic [ref=e17]: Markdown + assets
+    - generic [ref=e18]:
+      - button "Save Page" [disabled] [ref=e19]:
+        - generic [ref=e21]: Save Page
+      - button "Study Capture" [disabled] [ref=e22]:
+        - generic [ref=e24]: Study Capture
+    - paragraph [ref=e25]: Saves to Downloads/KnowledgeBase.
+    - group [ref=e26]:
+      - generic "KnowledgeBase Library" [ref=e27] [cursor=pointer]
+      - generic [ref=e30]:
+        - generic [ref=e31]:
+          - generic [ref=e32]: Search
+          - textbox "Search" [ref=e33]:
+            - /placeholder: Search by title, URL, or path
+        - generic [ref=e34]:
+          - generic [ref=e35]: Entries
+          - generic [ref=e36]: 1 / 1
+        - generic [ref=e38]:
+          - generic [ref=e39]:
+            - generic [ref=e40]: Example Capture
+            - generic [ref=e41]: example.com • html • 842 words • 2 assets
+            - generic [ref=e42]: "Saved: 2/7/2026, 11:34:32 PM • refreshable"
+          - generic [ref=e43]:
+            - button "Copy MD" [ref=e44] [cursor=pointer]
+            - button "Copy All" [ref=e45] [cursor=pointer]
+            - button "Open Source" [ref=e46] [cursor=pointer]
+            - button "Reveal File" [ref=e47] [cursor=pointer]
+          - group [ref=e48]:
+            - generic "More" [active] [ref=e49] [cursor=pointer]
+            - generic [ref=e50]:
+              - button "Copy Assets" [ref=e51] [cursor=pointer]
+              - button "Refresh" [ref=e52] [cursor=pointer]
+              - button "Remove" [ref=e53] [cursor=pointer]
+    - group [ref=e28]:
+      - generic "Options" [ref=e29] [cursor=pointer]

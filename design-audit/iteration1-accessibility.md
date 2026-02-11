@@ -1,0 +1,27 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: KB
+        - generic [ref=e7]:
+          - heading "KnowledgeBase" [level=1] [ref=e8]
+          - paragraph [ref=e9]: AI-ready Markdown
+      - img "Knowledge graph illustration" [ref=e10]
+  - main [ref=e11]:
+    - status [ref=e12]:
+      - paragraph [ref=e14]: Ready to capture the current page.
+    - generic [ref=e15]:
+      - heading "Capture" [level=2] [ref=e16]
+      - generic [ref=e17]: Markdown + assets
+    - generic [ref=e18]:
+      - button "Save Page" [ref=e19] [cursor=pointer]:
+        - generic [ref=e21]: Save Page
+      - button "Study Capture" [ref=e22] [cursor=pointer]:
+        - generic [ref=e24]: Study Capture
+    - paragraph [ref=e25]: Saves to Downloads/KnowledgeBase.
+    - text: + +
+    - group [ref=e26]:
+      - generic "KnowledgeBase Library +" [ref=e27] [cursor=pointer]
+    - group [ref=e28]:
+      - generic "Options +" [ref=e29] [cursor=pointer]
+      - text: +

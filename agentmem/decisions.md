@@ -18,3 +18,18 @@
 - 2026-02-06 Split full-page screenshot captures into multiple images for very tall pages and list them in the Markdown assets section.
 - 2026-02-06 Use authenticated fetch for embedded docs and fall back to direct downloads when CORS/auth blocks extraction.
 - 2026-02-08 Fail closed when asset or attachment size is unknown, enforce data URL size limits, and remove unused manifest permissions.
+- 2026-02-08 Refresh popup visual hierarchy (Capture section, microcopy, updated palette/shadows) and fix background pattern asset path.
+- 2026-02-08 Reduce background texture intensity for VSS (subtle, blurred pattern layer).
+- 2026-02-08 If VSS is selected in Learning needs, disable popup background texture entirely to avoid high-frequency line artifacts.
+- 2026-02-08 Harden asset/attachment fetching: cap asset count + total bytes, omit credentials for cross-origin HEAD/Range checks, and restrict manifest `host_permissions`/`matches` to http/https only.
+- 2026-02-08 KnowledgeBase Library UX: avoid nested accordions/menus inside entries; keep primary actions visible and move secondary actions behind a simple `More` toggle.
+- 2026-02-08 KnowledgeBase Library perf: precompute sort/search keys, cache sorted views, and batch DOM insertion (rAF) to keep search/filtering responsive on large libraries.
+- 2026-02-09 Student perf: apply popup defaults immediately (don’t block startup on storage reads); localize page images with concurrency-limited header checks + downloads while preserving deterministic selection and hard byte caps.
+- 2026-02-09 Content-script perf: embedded-document detection uses targeted selectors and time/node/url budgets for shadow-root scanning (avoid worst-case `querySelectorAll('*')` cost).
+- 2026-02-09 Library migration: normalize legacy saved entries by setting `url = source_url` when missing; background actions (save/remove) match by `url` or `source_url` and accept `file_path` as a fallback key.
+- 2026-02-10 Context menu: right-click selection/page -> copies a student-safe study prompt via MV3 offscreen document and opens the chosen AI destination.
+- 2026-02-10 Library robustness: Library entry actions key off a stable per-entry key (URL or file path or download id), so Remove works even when `url` is missing.
+- 2026-02-10 Vendor hardening: PDF.js UMD builds are transpiled with esbuild (ASCII charset, no whitespace minification) to reduce browser parse failures and keep PDF import/extraction available.
+- 2026-02-10 Crash fix: `fetchAssetHeaders` returns `response.headers` (not `Response`) so downstream `.get(...)` calls work; prevents popup/background crashes during image localization and embedded-file classification.
+- 2026-02-10 Add dev-only TypeScript typecheck (`tsconfig.json` with `allowJs` + `checkJs`) and keep it green (`npm run typecheck`) to prevent message/DOM/asset-handling regressions.
+- 2026-02-10 Diagnostics: popup records `kb_last_popup_error` so students can copy “Last popup error” without opening DevTools.

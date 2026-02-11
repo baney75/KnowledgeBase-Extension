@@ -1,0 +1,60 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]: KB
+        - generic [ref=e7]:
+          - heading "KnowledgeBase" [level=1] [ref=e8]
+          - paragraph [ref=e9]: AI-ready Markdown
+      - img "Knowledge graph illustration" [ref=e10]
+  - main [ref=e11]:
+    - status [ref=e12]:
+      - paragraph [ref=e14]: "Preview mode: UI loaded without the Chrome extension runtime."
+    - generic [ref=e15]:
+      - heading "Capture" [level=2] [ref=e16]
+      - generic [ref=e17]: Markdown + assets
+    - generic [ref=e18]:
+      - button "Save Page" [disabled] [ref=e19]:
+        - generic [ref=e21]: Save Page
+      - button "Study Capture" [disabled] [ref=e22]:
+        - generic [ref=e24]: Study Capture
+    - paragraph [ref=e25]: Saves to Downloads/KnowledgeBase.
+    - group [ref=e26]:
+      - generic "KnowledgeBase Library" [ref=e27] [cursor=pointer]
+      - generic [ref=e30]:
+        - generic [ref=e31]:
+          - generic [ref=e32]: Search
+          - textbox "Search" [ref=e33]:
+            - /placeholder: Search by title, URL, or path
+        - group "Library filters" [ref=e34]:
+          - generic [ref=e35]:
+            - generic [ref=e36]: Sort
+            - combobox "Sort" [ref=e37]:
+              - option "Recently saved" [selected]
+              - option "Title (A-Z)"
+              - option "Domain (A-Z)"
+          - generic [ref=e38]:
+            - checkbox "Refreshable only" [ref=e39] [cursor=pointer]
+            - generic [ref=e40]: Refreshable only
+        - generic [ref=e41]:
+          - generic [ref=e42]: Entries
+          - generic [ref=e43]: 1 / 1
+        - group [ref=e45]:
+          - 'generic "Example Capture example.com • html • 842 words • 2 assets Saved: 2/9/2026, 7:50:20 PM • refreshable" [ref=e46] [cursor=pointer]':
+            - generic [ref=e47]:
+              - generic [ref=e48]: Example Capture
+              - generic [ref=e49]: example.com • html • 842 words • 2 assets
+              - generic [ref=e50]: "Saved: 2/9/2026, 7:50:20 PM • refreshable"
+          - generic [ref=e75]:
+            - generic [ref=e76]:
+              - button "Copy File Path" [ref=e77] [cursor=pointer]
+              - button "Copy All Paths" [ref=e78] [cursor=pointer]
+              - button "Open Page" [ref=e79] [cursor=pointer]
+              - button "Reveal File" [ref=e80] [cursor=pointer]
+            - button "Less" [expanded] [active] [ref=e83] [cursor=pointer]
+            - generic [ref=e84]:
+              - button "Copy Attachments" [ref=e85] [cursor=pointer]
+              - button "Refresh" [ref=e86] [cursor=pointer]
+              - button "Remove" [ref=e87] [cursor=pointer]
+    - group [ref=e28]:
+      - generic "Options" [ref=e29] [cursor=pointer]

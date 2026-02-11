@@ -1,63 +1,201 @@
 // Popup script for KnowledgeBase extension
 
-let currentMarkdown = '';
-let currentFilePath = '';
-let currentHash = '';
-let currentWordCount = 0;
-let currentAssetPaths = [];
-let currentAssetFolder = '';
-let currentDownloadId = null;
+// @ts-check
+
+/** @type {string} */ let currentMarkdown = '';
+/** @type {string} */ let currentFilePath = '';
+/** @type {string} */ let currentHash = '';
+/** @type {number} */ let currentWordCount = 0;
+/** @type {string[]} */ let currentAssetPaths = [];
+/** @type {string} */ let currentAssetFolder = '';
+/** @type {number|null} */ let currentDownloadId = null;
 
 const MAX_IMPORT_BYTES = 100 * 1024 * 1024;
 const MAX_ASSET_BYTES = 12 * 1024 * 1024;
-const MAX_ASSET_COUNT = Number.POSITIVE_INFINITY;
+const MAX_ASSET_COUNT = 60;
+const MAX_ASSET_TOTAL_BYTES = 48 * 1024 * 1024;
 const MAX_SCREENSHOT_HEIGHT = 12000;
 
-const convertBtn = document.getElementById('convertBtn');
-const refreshAllBtn = document.getElementById('refreshAllBtn');
-const copyBtn = document.getElementById('copyBtn');
-const copyPathBtn = document.getElementById('copyPathBtn');
-const copyAssetsBtn = document.getElementById('copyAssetsBtn');
-const copyAllPathsBtn = document.getElementById('copyAllPathsBtn');
-const revealFileBtn = document.getElementById('revealFileBtn');
-const statusMessage = document.getElementById('statusMessage');
-const statusText = document.getElementById('statusText');
-const progressBar = document.getElementById('progressBar');
-const progressFill = document.getElementById('progressFill');
-const progressLabel = document.getElementById('progressLabel');
-const captureStudyBtn = document.getElementById('captureStudyBtn');
-const studyCard = document.getElementById('studyCard');
-const studyPreview = document.getElementById('studyPreview');
-const studyPromptEl = document.getElementById('studyPrompt');
-const copyPromptBtn = document.getElementById('copyPromptBtn');
-const copyImageBtn = document.getElementById('copyImageBtn');
-const embeddedCard = document.getElementById('embeddedCard');
-const embeddedList = document.getElementById('embeddedList');
-const embeddedSaveAllBtn = document.getElementById('embeddedSaveAllBtn');
-const embeddedSkipBtn = document.getElementById('embeddedSkipBtn');
-const destinationSelect = document.getElementById('destinationSelect');
-const sendStudyBtn = document.getElementById('sendStudyBtn');
-const saveCard = document.getElementById('saveCard');
-const previewContent = document.getElementById('previewContent');
-const baseFolderInput = document.getElementById('baseFolder');
-const overwriteToggle = document.getElementById('overwriteToggle');
-const skipUnchangedToggle = document.getElementById('skipUnchanged');
-const screenshotFallbackToggle = document.getElementById('screenshotFallback');
-const importFileBtn = document.getElementById('importFileBtn');
-const importFileInput = document.getElementById('importFileInput');
-const openDownloadsSettings = document.getElementById('openDownloadsSettings');
-const learningNeedsContainer = document.getElementById('learningNeeds');
-const learningNeedsOtherInput = document.getElementById('learningNeedsOther');
-const fileNameEl = document.getElementById('fileName');
-const wordCountEl = document.getElementById('wordCount');
-const assetCountEl = document.getElementById('assetCount');
-const contentHashEl = document.getElementById('contentHash');
-const captureModeEl = document.getElementById('captureMode');
-const savedCountEl = document.getElementById('savedCount');
-const lastRefreshEl = document.getElementById('lastRefresh');
-const libraryList = document.getElementById('libraryList');
-const librarySearch = document.getElementById('librarySearch');
-const libraryCount = document.getElementById('libraryCount');
+const IS_EXTENSION_RUNTIME = typeof chrome !== 'undefined' && Boolean(chrome && chrome.runtime && chrome.runtime.id);
+
+// Lightweight performance instrumentation (opt-in).
+// Enable with: localStorage.setItem('kb_debug_perf', '1')
+const DEBUG_PERF = (() => {
+  try {
+    return localStorage.getItem('kb_debug_perf') === '1';
+  } catch (error) {
+    return false;
+  }
+})();
+
+function perfMark(name) {
+  if (!DEBUG_PERF) return;
+  try {
+    performance.mark(name);
+  } catch (error) {
+    // ignore
+  }
+}
+
+function perfMeasure(label, startMark, endMark) {
+  if (!DEBUG_PERF) return;
+  try {
+    performance.measure(label, startMark, endMark);
+    const entry = performance.getEntriesByName(label).slice(-1)[0];
+    if (entry) {
+      console.log(`[KB perf] ${label}: ${Math.round(entry.duration)}ms`);
+    }
+  } catch (error) {
+    // ignore
+  }
+}
+
+perfMark('kb:popup:script-start');
+
+// Lazy-load heavy vendor deps so the popup opens fast.
+const _scriptLoaders = new Map();
+
+function resolveRuntimeUrl(path) {
+  if (IS_EXTENSION_RUNTIME) return chrome.runtime.getURL(path);
+  return path;
+}
+
+function loadScriptOnce(path) {
+  const src = resolveRuntimeUrl(path);
+  if (_scriptLoaders.has(src)) return _scriptLoaders.get(src);
+  const promise = new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.async = true;
+    el.onload = () => resolve(true);
+    el.onerror = () => reject(new Error(`Failed to load ${path}`));
+    document.head.appendChild(el);
+  });
+  _scriptLoaders.set(src, promise);
+  return promise;
+}
+
+function sendMessageWithTimeout(message, timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    if (!IS_EXTENSION_RUNTIME) {
+      resolve({ success: false, error: 'Extension runtime unavailable.' });
+      return;
+    }
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ success: false, error: `Timeout after ${timeoutMs}ms waiting for background.` });
+    }, timeoutMs);
+
+    try {
+      chrome.runtime.sendMessage(message, (response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const lastError = chrome.runtime.lastError && chrome.runtime.lastError.message;
+        if (lastError) {
+          resolve({ success: false, error: lastError });
+          return;
+        }
+        resolve(response || { success: false, error: 'No response.' });
+      });
+    } catch (error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ success: false, error: error.message || 'sendMessage failed.' });
+    }
+  });
+}
+
+async function ensurePdfJsLoaded() {
+  if (window.pdfjsLib && typeof window.pdfjsLib.getDocument === 'function') return;
+  await loadScriptOnce('scripts/vendor/pdf.min.js');
+  if (!window.pdfjsLib || typeof window.pdfjsLib.getDocument !== 'function') {
+    throw new Error('PDF.js failed to initialize');
+  }
+  if (window.pdfjsLib.GlobalWorkerOptions && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = resolveRuntimeUrl('scripts/vendor/pdf.worker.min.js');
+  }
+  // MV3 CSP + Chromium forks (including Vivaldi) can be finicky with worker loading.
+  // Prefer the no-worker mode for reliability; PDF extraction is less common than HTML capture.
+  try {
+    if (IS_EXTENSION_RUNTIME) window.pdfjsLib.disableWorker = true;
+  } catch (error) {
+    // ignore
+  }
+}
+
+async function ensureJsZipLoaded() {
+  if (window.JSZip) return;
+  await loadScriptOnce('scripts/vendor/jszip.min.js');
+  if (!window.JSZip) {
+    throw new Error('JSZip failed to initialize');
+  }
+}
+
+const convertBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('convertBtn'))
+const refreshAllBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('refreshAllBtn'))
+const copyBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyBtn'))
+const copyPathBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyPathBtn'))
+const copyAssetsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyAssetsBtn'))
+const copyAllPathsBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyAllPathsBtn'))
+const revealFileBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('revealFileBtn'))
+const statusMessage = /** @type {HTMLElement|null} */ (document.getElementById('statusMessage'))
+const statusText = /** @type {HTMLElement|null} */ (document.getElementById('statusText'))
+const progressBar = /** @type {HTMLElement|null} */ (document.getElementById('progressBar'))
+const progressFill = /** @type {HTMLElement|null} */ (document.getElementById('progressFill'))
+const progressLabel = /** @type {HTMLElement|null} */ (document.getElementById('progressLabel'))
+const captureStudyBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('captureStudyBtn'))
+const studyCard = /** @type {HTMLElement|null} */ (document.getElementById('studyCard'))
+const studyPreview = /** @type {HTMLImageElement|null} */ (document.getElementById('studyPreview'))
+const studyPromptEl = /** @type {HTMLElement|null} */ (document.getElementById('studyPrompt'))
+const copyPromptBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyPromptBtn'))
+const copyImageBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyImageBtn'))
+const embeddedCard = /** @type {HTMLElement|null} */ (document.getElementById('embeddedCard'))
+const embeddedList = /** @type {HTMLElement|null} */ (document.getElementById('embeddedList'))
+const embeddedSaveAllBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('embeddedSaveAllBtn'))
+const embeddedSkipBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('embeddedSkipBtn'))
+const destinationSelect = /** @type {HTMLSelectElement|null} */ (document.getElementById('destinationSelect'))
+const sendStudyBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('sendStudyBtn'))
+const saveCard = /** @type {HTMLElement|null} */ (document.getElementById('saveCard'))
+const previewContent = /** @type {HTMLElement|null} */ (document.getElementById('previewContent'))
+const baseFolderInput = /** @type {HTMLInputElement|null} */ (document.getElementById('baseFolder'))
+const baseFolderLabel = /** @type {HTMLElement|null} */ (document.getElementById('baseFolderLabel'))
+const overwriteToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('overwriteToggle'))
+const skipUnchangedToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('skipUnchanged'))
+const screenshotFallbackToggle = /** @type {HTMLInputElement|null} */ (document.getElementById('screenshotFallback'))
+const importFileBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('importFileBtn'))
+const importFileInput = /** @type {HTMLInputElement|null} */ (document.getElementById('importFileInput'))
+const openDownloadsSettings = /** @type {HTMLButtonElement|null} */ (document.getElementById('openDownloadsSettings'))
+const learningNeedsContainer = /** @type {HTMLElement|null} */ (document.getElementById('learningNeeds'))
+const learningNeedsOtherInput = /** @type {HTMLInputElement|null} */ (document.getElementById('learningNeedsOther'))
+const fileNameEl = /** @type {HTMLElement|null} */ (document.getElementById('fileName'))
+const wordCountEl = /** @type {HTMLElement|null} */ (document.getElementById('wordCount'))
+const assetCountEl = /** @type {HTMLElement|null} */ (document.getElementById('assetCount'))
+const contentHashEl = /** @type {HTMLElement|null} */ (document.getElementById('contentHash'))
+const captureModeEl = /** @type {HTMLElement|null} */ (document.getElementById('captureMode'))
+const savedCountEl = /** @type {HTMLElement|null} */ (document.getElementById('savedCount'))
+const lastRefreshEl = /** @type {HTMLElement|null} */ (document.getElementById('lastRefresh'))
+const libraryPanel = /** @type {HTMLDetailsElement|null} */ (document.getElementById('libraryPanel'))
+const optionsPanel = /** @type {HTMLDetailsElement|null} */ (document.getElementById('optionsPanel'))
+const libraryList = /** @type {HTMLElement|null} */ (document.getElementById('libraryList'))
+const librarySearch = /** @type {HTMLInputElement|null} */ (document.getElementById('librarySearch'))
+const libraryCount = /** @type {HTMLElement|null} */ (document.getElementById('libraryCount'))
+const librarySort = /** @type {HTMLSelectElement|null} */ (document.getElementById('librarySort'))
+const libraryRefreshableOnly = /** @type {HTMLInputElement|null} */ (document.getElementById('libraryRefreshableOnly'))
+const diagnosticsPanel = /** @type {HTMLDetailsElement|null} */ (document.getElementById('diagnosticsPanel'))
+const popupErrorBlock = /** @type {HTMLElement|null} */ (document.getElementById('popupErrorBlock'))
+const popupErrorText = /** @type {HTMLElement|null} */ (document.getElementById('popupErrorText'))
+const copyPopupErrorBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyPopupErrorBtn'))
+const bgErrorBlock = /** @type {HTMLElement|null} */ (document.getElementById('bgErrorBlock'))
+const bgErrorText = /** @type {HTMLElement|null} */ (document.getElementById('bgErrorText'))
+const copyBgErrorBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyBgErrorBtn'))
+const contextPromptBlock = /** @type {HTMLElement|null} */ (document.getElementById('contextPromptBlock'))
+const contextPromptText = /** @type {HTMLElement|null} */ (document.getElementById('contextPromptText'))
+const copyContextPromptBtn = /** @type {HTMLButtonElement|null} */ (document.getElementById('copyContextPromptBtn'))
+const diagnosticsHint = /** @type {HTMLElement|null} */ (document.getElementById('diagnosticsHint'))
 
 const DEFAULT_SETTINGS = {
   baseFolder: 'KnowledgeBase',
@@ -72,12 +210,95 @@ const STORAGE_KEYS = {
   savedUrls: 'kb_saved_urls'
 };
 
-let studyPromptText = '';
-let studyImageUrl = '';
-let studyContextUrl = '';
-let studyContextTitle = '';
-let libraryEntries = [];
+const DIAGNOSTIC_KEYS = {
+  lastBackgroundError: 'kb_last_bg_error',
+  lastContextPrompt: 'kb_last_context_prompt',
+  lastPopupError: 'kb_last_popup_error'
+};
+
+/** @type {string} */ let studyPromptText = '';
+/** @type {string} */ let studyImageUrl = '';
+/** @type {string} */ let studyContextUrl = '';
+/** @type {string} */ let studyContextTitle = '';
+/** @type {Array<Record<string, any>>} */ let libraryEntries = [];
+/** @type {Map<string, Record<string, any>>} */ let libraryEntryMap = new Map();
+let librarySortedViews = null;
+let libraryRenderToken = 0;
+let libraryOpenItem = null;
 let pendingEmbedContext = null;
+let libraryLoaded = false;
+let librarySearchTimer = null;
+
+const PREVIEW_LIBRARY_ENTRIES = [
+  {
+    title: 'Example Capture',
+    url: 'https://example.com/docs/getting-started',
+    source_domain: 'example.com',
+    last_saved_at: new Date().toISOString(),
+    capture_mode: 'html',
+    refreshable: true,
+    word_count: 842,
+    file_path: 'KnowledgeBase/example.com/getting-started--deadbeef00.md',
+    asset_paths: [
+      'KnowledgeBase/example.com/getting-started--deadbeef00.assets/image-abc123.png',
+      'KnowledgeBase/example.com/getting-started--deadbeef00.assets/source.pdf'
+    ],
+    asset_folder: 'getting-started--deadbeef00.assets',
+    asset_count: 2
+  }
+];
+
+function normalizeError(error) {
+  if (!error) return { message: 'Unknown error', stack: '' };
+  if (typeof error === 'string') return { message: error, stack: '' };
+  return {
+    message: error.message || 'Unknown error',
+    stack: error.stack || ''
+  };
+}
+
+function recordPopupError(where, error, extra = null) {
+  const normalized = normalizeError(error);
+  const payload = {
+    where,
+    message: normalized.message,
+    stack: normalized.stack,
+    extra,
+    at: new Date().toISOString()
+  };
+  try {
+    if (IS_EXTENSION_RUNTIME) {
+      chrome.storage.local.set({ [DIAGNOSTIC_KEYS.lastPopupError]: payload });
+    }
+  } catch (err) {
+    // ignore
+  }
+  console.error('KnowledgeBase popup error:', payload);
+}
+
+// Capture popup errors so students can self-serve diagnostics.
+window.addEventListener('unhandledrejection', (event) => {
+  recordPopupError('unhandledrejection', (event && event.reason) || new Error('Unhandled rejection'));
+});
+window.addEventListener('error', (event) => {
+  recordPopupError('error', (event && event.error) || new Error((event && event.message) || 'Popup error'));
+});
+
+function applyUiPreferences(settings) {
+  try {
+    const needs = (settings && settings.learningNeeds) || [];
+    const hasVss = Array.isArray(needs) && needs.includes('VSS (Visual Snow Syndrome)');
+    document.body.dataset.vss = hasVss ? 'true' : 'false';
+    document.body.dataset.adhd = needs.includes('ADHD') ? 'true' : 'false';
+    document.body.dataset.autism = needs.includes('HFA/Autism') ? 'true' : 'false';
+    document.body.dataset.ocd = needs.includes('OCD') ? 'true' : 'false';
+    document.body.dataset.dyslexia = needs.includes('Dyslexia') ? 'true' : 'false';
+    document.body.dataset.dyscalculia = needs.includes('Dyscalculia') ? 'true' : 'false';
+    document.body.dataset.anxiety = needs.includes('Anxiety') ? 'true' : 'false';
+  } catch (error) {
+    // Non-fatal: UI preferences should never block the popup from loading.
+  }
+}
 
 function updateStatus(message, type = 'info') {
   if (statusMessage) {
@@ -149,7 +370,7 @@ function showEmbeddedCard(show) {
 
 function updateStudyPrompt() {
   if (!studyContextUrl) return;
-  const destinationKey = destinationSelect?.value || 'perplexity';
+  const destinationKey = (destinationSelect && destinationSelect.value) || 'perplexity';
   const settings = persistSettings();
   studyPromptText = buildStudyPrompt(studyContextUrl, studyContextTitle, destinationKey, settings);
   if (studyPromptEl) {
@@ -165,6 +386,11 @@ function sanitizeFolder(value) {
     .replace(/^[\/]+/g, '')
     .replace(/[<>:"|?*]/g, '')
     .trim() || DEFAULT_SETTINGS.baseFolder;
+}
+
+function updateBaseFolderLabel(value) {
+  if (!baseFolderLabel) return;
+  baseFolderLabel.textContent = sanitizeFolder(value || DEFAULT_SETTINGS.baseFolder);
 }
 
 function sanitizeSegment(value) {
@@ -400,6 +626,36 @@ function estimateDataUrlBytes(dataUrl) {
   }
 }
 
+async function mapWithConcurrency(items, limit, fn) {
+  const safeLimit = Math.max(1, Math.floor(limit || 1));
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(safeLimit, items.length) }, async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) break;
+      try {
+        results[index] = await fn(items[index], index);
+      } catch (error) {
+        results[index] = null;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function assetHashKey(url) {
+  if (!url) return '';
+  // Hashing very large data URLs can be expensive; keep a stable truncated key.
+  if (url.startsWith('data:')) {
+    const prefix = url.slice(0, 8192);
+    return `${prefix}|len:${url.length}`;
+  }
+  return url;
+}
+
 function extensionFromMime(mimeType) {
   if (!mimeType) return '';
   const mime = mimeType.split(';')[0].trim().toLowerCase();
@@ -434,11 +690,19 @@ function replaceMarkdownImageUrls(markdown, replacements) {
   });
 }
 
-async function fetchAssetHeaders(url) {
+async function fetchAssetHeaders(url, pageUrl) {
   if (!isHttpUrl(url)) return null;
+  const isSameOrigin = sameOriginUrl(url, pageUrl);
   try {
-    const head = await fetch(url, { method: 'HEAD', credentials: 'include' });
-    if (head.ok) return head;
+    const parsed = new URL(url);
+    if (isLoopbackOrPrivateHost(parsed.hostname) && !isSameOrigin) return null;
+  } catch (error) {
+    return null;
+  }
+  const credentials = isSameOrigin ? 'include' : 'omit';
+  try {
+    const head = await fetch(url, { method: 'HEAD', credentials, cache: 'no-store' });
+    if (head.ok) return head.headers;
   } catch (error) {
     // ignore and fallback
   }
@@ -446,9 +710,10 @@ async function fetchAssetHeaders(url) {
     const range = await fetch(url, {
       method: 'GET',
       headers: { Range: 'bytes=0-0' },
-      credentials: 'include'
+      credentials,
+      cache: 'no-store'
     });
-    if (range.ok) return range;
+    if (range.ok) return range.headers;
   } catch (error) {
     return null;
   }
@@ -474,74 +739,83 @@ async function localizeMarkdownImages(markdown, pageInfo, overwrite) {
   }
 
   const uniqueUrls = Array.from(new Set(images.map(img => img.url))).slice(0, MAX_ASSET_COUNT);
-  const replacements = {};
-  const assetPaths = [];
-  const assetRelativePaths = [];
+  const candidates = uniqueUrls
+    .filter(url => url && !url.startsWith('blob:'))
+    .map(url => ({
+      url,
+      isData: url.startsWith('data:'),
+      isHttp: url.startsWith('http://') || url.startsWith('https://')
+    }))
+    .filter(item => item.isData || item.isHttp);
 
-  for (const url of uniqueUrls) {
-    if (!url || url.startsWith('blob:')) continue;
-    const isData = url.startsWith('data:');
-    const isHttp = url.startsWith('http://') || url.startsWith('https://');
-    if (!isData && !isHttp) continue;
+  const pageUrl = (pageInfo && pageInfo.url && pageInfo.url.href) || '';
 
-    let mimeType = '';
-    let size = 0;
-    if (isData) {
-      mimeType = parseDataUrlMime(url);
-      size = estimateDataUrlBytes(url);
-      if (size === null) {
-        continue;
-      }
-      if (size > MAX_ASSET_BYTES) {
-        continue;
-      }
-    } else {
-      const headers = await fetchAssetHeaders(url);
-      size = getAssetSizeFromHeaders(headers);
-      mimeType = headers?.get('content-type') || '';
-      if (size === null) {
-        continue;
-      }
-      if (size > MAX_ASSET_BYTES) {
-        continue;
-      }
+  // Fetch size/type hints concurrently to reduce wall-clock time on pages with many images.
+  const infos = await mapWithConcurrency(candidates, 6, async (candidate) => {
+    const url = candidate.url;
+    if (candidate.isData) {
+      const mimeType = parseDataUrlMime(url);
+      const size = estimateDataUrlBytes(url);
+      if (size === null || size > MAX_ASSET_BYTES) return null;
+      return { url, size, mimeType };
     }
+    const headers = await fetchAssetHeaders(url, pageUrl);
+    const size = getAssetSizeFromHeaders(headers);
+    const mimeType = (headers && headers.get('content-type')) || '';
+    if (size === null || size > MAX_ASSET_BYTES) return null;
+    return { url, size, mimeType };
+  });
 
-    const assetHash = await shortHash(url);
-    const ext = mimeToExtension(mimeType) || extensionFromUrl(url) || 'img';
+  // Select deterministically in URL order with hard caps enforced (count + per-asset + total bytes).
+  const selected = [];
+  let totalBytes = 0;
+  for (const info of infos) {
+    if (!info) continue;
+    if (totalBytes + info.size > MAX_ASSET_TOTAL_BYTES) continue;
+    totalBytes += info.size;
+    selected.push(info);
+  }
+
+  // Precompute filenames concurrently, then download with a small concurrency limit.
+  const prepared = await mapWithConcurrency(selected, 8, async (info) => {
+    const assetHash = await shortHash(assetHashKey(info.url));
+    const ext = mimeToExtension(info.mimeType) || extensionFromUrl(info.url) || 'img';
     const filename = `image-${assetHash}.${ext}`;
     const filePath = buildAssetPath(pageInfo.baseFolder, pageInfo.url, pageInfo.urlHash, filename);
     const relativePath = `${pageInfo.assetFolderName}/${filename}`;
+    return { url: info.url, filePath, relativePath };
+  });
 
-    const result = await downloadUrl(url, filePath, overwrite);
-    if (!result.success) {
-      continue;
-    }
+  const downloadResults = await mapWithConcurrency(prepared, 4, async (asset) => {
+    const result = await downloadUrl(asset.url, asset.filePath, overwrite);
+    return { ...asset, success: Boolean(result && result.success) };
+  });
 
-    replacements[url] = relativePath;
-    assetPaths.push(filePath);
-    assetRelativePaths.push(relativePath);
+  const replacements = {};
+  const assetPaths = [];
+  const assetRelativePaths = [];
+  for (const result of downloadResults) {
+    if (!result || !result.success) continue;
+    replacements[result.url] = result.relativePath;
+    assetPaths.push(result.filePath);
+    assetRelativePaths.push(result.relativePath);
   }
 
   const updatedMarkdown = replaceMarkdownImageUrls(markdown, replacements);
-  return {
-    markdown: updatedMarkdown,
-    assetPaths,
-    assetRelativePaths,
-    skipped: Math.max(0, images.length - assetPaths.length),
-    total: images.length
-  };
+  const total = candidates.length;
+  const skipped = Math.max(0, total - assetPaths.length);
+  return { markdown: updatedMarkdown, assetPaths, assetRelativePaths, skipped, total };
 }
 
-async function classifyEmbeddedUrl(url) {
+async function classifyEmbeddedUrl(url, pageUrl) {
   const ext = extensionFromUrl(url);
   if (ext) return ext;
-  const headers = await fetchAssetHeaders(url);
-  const mimeType = headers?.get('content-type') || '';
+  const headers = await fetchAssetHeaders(url, pageUrl);
+  const mimeType = (headers && headers.get('content-type')) || '';
   return extensionFromMime(mimeType);
 }
 
-async function getEmbeddedCandidates(embeddedFiles) {
+async function getEmbeddedCandidates(embeddedFiles, pageUrl) {
   if (!embeddedFiles) return [];
   const candidates = []
     .concat(embeddedFiles.pdfUrls || [])
@@ -551,7 +825,7 @@ async function getEmbeddedCandidates(embeddedFiles) {
   const results = [];
   for (const url of candidates) {
     if (!url) continue;
-    const ext = await classifyEmbeddedUrl(url);
+    const ext = await classifyEmbeddedUrl(url, pageUrl);
     if (!ext) continue;
     const fileName = filenameFromPath(url.split('?')[0].split('#')[0]) || 'document';
     results.push({
@@ -570,6 +844,12 @@ function delay(ms) {
 function sendTabMessage(tabId, payload) {
   return new Promise((resolve) => {
     chrome.tabs.sendMessage(tabId, payload, (response) => {
+      // Prevent "Unchecked runtime.lastError" noise when the tab has no content script.
+      const lastError = chrome.runtime.lastError && chrome.runtime.lastError.message;
+      if (lastError) {
+        resolve(null);
+        return;
+      }
       resolve(response || null);
     });
   });
@@ -581,7 +861,7 @@ function compactUrl(url) {
     const segments = parsed.pathname.split('/').filter(Boolean);
     const tail = segments.slice(-2).join('/');
     const base = tail ? `${parsed.hostname}/${tail}` : parsed.hostname;
-    return parsed.search ? `${base}?…` : base;
+    return parsed.search ? `${base}?...` : base;
   } catch (error) {
     return url;
   }
@@ -693,6 +973,36 @@ function isHttpUrl(url) {
   return url && (url.startsWith('http://') || url.startsWith('https://'));
 }
 
+function isLoopbackOrPrivateHost(hostname) {
+  if (!hostname) return true;
+  const lower = hostname.toLowerCase();
+  if (lower === 'localhost' || lower.endsWith('.localhost')) return true;
+  if (lower === '::1') return true;
+
+  const ipv4Match = lower.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!ipv4Match) return false;
+  const parts = ipv4Match.slice(1).map(n => Number(n));
+  if (parts.some(n => !Number.isFinite(n) || n < 0 || n > 255)) return true;
+
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  return false;
+}
+
+function sameOriginUrl(a, b) {
+  if (!a || !b) return false;
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch (error) {
+    return false;
+  }
+}
+
 function buildDownloadPath(baseFolder, url, urlHash) {
   const parts = getPageFolders(baseFolder, url, urlHash);
   const filename = `${parts.pathSlug}--${urlHash}.md`;
@@ -802,12 +1112,12 @@ async function buildMarkdown(response, options = {}) {
     source_url: url.href,
     source_domain: url.hostname,
     captured_at: capturedAt,
-    source_published_at: response.meta?.publishedTime || '',
-    source_updated_at: response.meta?.modifiedTime || response.meta?.lastModified || '',
-    site_name: response.meta?.siteName || '',
-    author: response.meta?.author || '',
-    description: response.meta?.description || '',
-    language: response.meta?.language || '',
+    source_published_at: (response.meta && response.meta.publishedTime) || '',
+    source_updated_at: (response.meta && (response.meta.modifiedTime || response.meta.lastModified)) || '',
+    site_name: (response.meta && response.meta.siteName) || '',
+    author: (response.meta && response.meta.author) || '',
+    description: (response.meta && response.meta.description) || '',
+    language: (response.meta && response.meta.language) || '',
     word_count: wordCount,
     char_count: textContent.length,
     content_hash: `sha256:${contentHash}`,
@@ -890,7 +1200,7 @@ async function buildScreenshotMarkdown({ url, title, imagePaths = [], imageRelat
   };
 }
 
-function buildPdfAttachmentMarkdown({ url, title, pdfFileName, fileHash, assetFolderName, assetRelativePath, captureModeOverride }) {
+function buildPdfAttachmentMarkdown({ url, title, pdfFileName, fileHash, assetFolderName, assetRelativePath, captureModeOverride = '' }) {
   const capturedAt = new Date().toISOString();
   const captureMode = captureModeOverride || 'pdf-attachment';
   const meta = {
@@ -936,7 +1246,7 @@ function buildPdfAttachmentMarkdown({ url, title, pdfFileName, fileHash, assetFo
   };
 }
 
-function buildAttachmentMarkdown({ url, title, attachmentFileName, fileHash, attachmentType, assetFolderName, assetRelativePath, captureModeOverride }) {
+function buildAttachmentMarkdown({ url, title, attachmentFileName, fileHash, attachmentType, assetFolderName, assetRelativePath, captureModeOverride = '' }) {
   const capturedAt = new Date().toISOString();
   const typeLabel = (attachmentType || 'file').toUpperCase();
   const captureMode = captureModeOverride || `${attachmentType}-attachment`;
@@ -1036,7 +1346,7 @@ async function buildMarkdownFromRaw({ rawMarkdown, url, title, captureMode, asse
 function toggleLearningNeedsOther() {
   if (!learningNeedsOtherInput || !learningNeedsContainer) return;
   const otherBox = learningNeedsContainer.querySelector('input[value="Other (typed below)"]');
-  const shouldShow = Boolean(otherBox && otherBox.checked);
+  const shouldShow = Boolean(otherBox && otherBox instanceof HTMLInputElement && otherBox.checked);
   learningNeedsOtherInput.style.display = shouldShow ? 'block' : 'none';
   learningNeedsOtherInput.disabled = !shouldShow;
   if (!shouldShow) {
@@ -1046,6 +1356,7 @@ function toggleLearningNeedsOther() {
 
 function cacheSettings(settings) {
   baseFolderInput.value = settings.baseFolder;
+  updateBaseFolderLabel(settings.baseFolder);
   overwriteToggle.checked = settings.overwrite;
   skipUnchangedToggle.checked = settings.skipUnchanged;
   if (screenshotFallbackToggle) {
@@ -1057,6 +1368,7 @@ function cacheSettings(settings) {
   if (learningNeedsContainer) {
     const selected = new Set(settings.learningNeeds || []);
     learningNeedsContainer.querySelectorAll('input[type="checkbox"]').forEach((box) => {
+      if (!(box instanceof HTMLInputElement)) return;
       box.checked = selected.has(box.value);
     });
   }
@@ -1064,12 +1376,21 @@ function cacheSettings(settings) {
     learningNeedsOtherInput.value = settings.learningNeedsOther || '';
   }
   toggleLearningNeedsOther();
+  applyUiPreferences(settings);
 }
 
 function loadSettings() {
   return new Promise(resolve => {
+    // Apply safe defaults immediately so the popup is usable even if storage is slow.
+    cacheSettings(DEFAULT_SETTINGS);
+    if (!IS_EXTENSION_RUNTIME) {
+      perfMark('kb:popup:settings-loaded');
+      resolve({ ...DEFAULT_SETTINGS });
+      return;
+    }
     chrome.storage.local.get(DEFAULT_SETTINGS, (settings) => {
       cacheSettings(settings);
+      perfMark('kb:popup:settings-loaded');
       resolve(settings);
     });
   });
@@ -1079,19 +1400,25 @@ function persistSettings() {
   const needs = [];
   if (learningNeedsContainer) {
     learningNeedsContainer.querySelectorAll('input[type="checkbox"]').forEach((box) => {
+      if (!(box instanceof HTMLInputElement)) return;
       if (box.checked) needs.push(box.value);
     });
   }
+  const sanitizedBaseFolder = sanitizeFolder(baseFolderInput.value);
   const settings = {
-    baseFolder: sanitizeFolder(baseFolderInput.value),
+    baseFolder: sanitizedBaseFolder,
     overwrite: overwriteToggle.checked,
     skipUnchanged: skipUnchangedToggle.checked,
     screenshotFallback: screenshotFallbackToggle ? screenshotFallbackToggle.checked : true,
-    studyDestination: destinationSelect?.value || 'perplexity',
+    studyDestination: (destinationSelect && destinationSelect.value) || 'perplexity',
     learningNeeds: needs,
-    learningNeedsOther: learningNeedsOtherInput?.value?.trim() || ''
+    learningNeedsOther: (learningNeedsOtherInput && learningNeedsOtherInput.value ? learningNeedsOtherInput.value.trim() : '') || ''
   };
-  chrome.storage.local.set(settings);
+  updateBaseFolderLabel(sanitizedBaseFolder);
+  applyUiPreferences(settings);
+  if (IS_EXTENSION_RUNTIME) {
+    chrome.storage.local.set(settings);
+  }
   return settings;
 }
 
@@ -1106,29 +1433,111 @@ function formatTimestamp(value) {
 }
 
 function refreshStats() {
+  if (!IS_EXTENSION_RUNTIME) {
+    savedCountEl.textContent = '0';
+    lastRefreshEl.textContent = '-';
+    return;
+  }
   chrome.runtime.sendMessage({ action: 'getSavedStats' }, (response) => {
+    const lastError = chrome.runtime.lastError && chrome.runtime.lastError.message;
+    if (lastError) return;
     if (!response || !response.success) return;
-    savedCountEl.textContent = String(response.count ?? 0);
+    savedCountEl.textContent = String((response.count === null || response.count === undefined) ? 0 : response.count);
     lastRefreshEl.textContent = response.lastRefresh ? formatTimestamp(response.lastRefresh) : '-';
+  });
+}
+
+function loadDiagnostics() {
+  if (!diagnosticsPanel) return Promise.resolve();
+  if (!IS_EXTENSION_RUNTIME) {
+    if (popupErrorBlock) popupErrorBlock.hidden = true;
+    if (bgErrorBlock) bgErrorBlock.hidden = true;
+    if (contextPromptBlock) contextPromptBlock.hidden = true;
+    if (diagnosticsHint) diagnosticsHint.textContent = 'Preview mode: diagnostics require the extension runtime.';
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    chrome.storage.local.get({
+      [DIAGNOSTIC_KEYS.lastPopupError]: null,
+      [DIAGNOSTIC_KEYS.lastBackgroundError]: null,
+      [DIAGNOSTIC_KEYS.lastContextPrompt]: null
+    }, (data) => {
+      const pop = data[DIAGNOSTIC_KEYS.lastPopupError] || null;
+      const bg = data[DIAGNOSTIC_KEYS.lastBackgroundError] || null;
+      const ctx = data[DIAGNOSTIC_KEYS.lastContextPrompt] || null;
+
+      if (popupErrorBlock && popupErrorText) {
+        popupErrorBlock.hidden = !pop;
+        popupErrorText.textContent = pop ? JSON.stringify(pop, null, 2) : '-';
+      }
+
+      if (bgErrorBlock && bgErrorText) {
+        bgErrorBlock.hidden = !bg;
+        if (bg) {
+          bgErrorText.textContent = JSON.stringify(bg, null, 2);
+        } else {
+          bgErrorText.textContent = '-';
+        }
+      }
+
+      if (contextPromptBlock && contextPromptText) {
+        contextPromptBlock.hidden = !ctx;
+        if (ctx && typeof ctx.text === 'string') {
+          const header = ctx.error ? `Copy failed: ${ctx.error}\n\n` : '';
+          const snippet = ctx.text.length > 1200 ? `${ctx.text.slice(0, 1200)}\n\n[...truncated in UI]` : ctx.text;
+          contextPromptText.textContent = `${header}${snippet}`;
+        } else {
+          contextPromptText.textContent = '-';
+        }
+      }
+
+      if (diagnosticsHint) {
+        diagnosticsHint.textContent = (pop || bg || ctx)
+          ? 'If something broke, copy this into a bug report.'
+          : 'No recent errors recorded.';
+      }
+      resolve();
+    });
   });
 }
 
 function getSavedStats() {
   return new Promise((resolve) => {
+    if (!IS_EXTENSION_RUNTIME) {
+      resolve({ count: 0, lastRefresh: '' });
+      return;
+    }
     chrome.runtime.sendMessage({ action: 'getSavedStats' }, (response) => {
+      const lastError = chrome.runtime.lastError && chrome.runtime.lastError.message;
+      if (lastError) {
+        resolve({ count: 0, lastRefresh: '' });
+        return;
+      }
       if (!response || !response.success) {
         resolve({ count: 0, lastRefresh: '' });
         return;
       }
-      resolve({ count: response.count ?? 0, lastRefresh: response.lastRefresh || '' });
+      resolve({
+        count: (response.count === null || response.count === undefined) ? 0 : response.count,
+        lastRefresh: response.lastRefresh || ''
+      });
     });
   });
 }
 
 function getSavedUrls() {
   return new Promise((resolve) => {
+    if (!IS_EXTENSION_RUNTIME) {
+      resolve([]);
+      return;
+    }
     chrome.storage.local.get({ [STORAGE_KEYS.savedUrls]: [] }, (data) => {
-      resolve(data[STORAGE_KEYS.savedUrls] || []);
+      try {
+        const raw = data ? data[STORAGE_KEYS.savedUrls] : [];
+        resolve(Array.isArray(raw) ? raw : []);
+      } catch (error) {
+        resolve([]);
+      }
     });
   });
 }
@@ -1136,126 +1545,299 @@ function getSavedUrls() {
 function formatEntryMeta(entry) {
   const domain = entry.source_domain || (() => {
     try {
-      return new URL(entry.url).hostname;
+      return new URL(entry.url || entry.source_url || '').hostname;
     } catch (error) {
       return 'unknown';
     }
   })();
   const mode = entry.capture_mode || 'html';
   const words = entry.word_count || 0;
-  const assets = entry.asset_count ?? (entry.asset_paths ? entry.asset_paths.length : 0);
-  return `${domain} • ${mode} • ${words} words • ${assets} assets`;
+  const assets = (entry.asset_count === null || entry.asset_count === undefined)
+    ? (entry.asset_paths ? entry.asset_paths.length : 0)
+    : entry.asset_count;
+  return `${domain} | ${mode} | ${words} words | ${assets} assets`;
+}
+
+function formatEntryLine2(entry) {
+  const saved = entry.last_saved_at ? formatTimestamp(entry.last_saved_at) : '-';
+  const refreshable = entry.refreshable === false || entry.capture_mode === 'screenshot' ? 'manual' : 'refreshable';
+  return `Saved: ${saved} | ${refreshable}`;
+}
+
+function formatEntryTitle(entry) {
+  const raw = typeof entry.title === 'string' ? entry.title.trim() : '';
+  if (raw) return raw;
+  const url = entry.url || '';
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : '';
+    return `${parsed.hostname}${path}`;
+  } catch (error) {
+    return url || 'Untitled capture';
+  }
+}
+
+function getLibraryEntryKey(entry, index) {
+  const url = (entry && (entry.url || entry.source_url)) || '';
+  if (url) return url;
+  const filePath = (entry && entry.file_path) || '';
+  if (filePath) return `file:${filePath}`;
+  const downloadId = entry && entry.download_id;
+  if (downloadId) return `dl:${downloadId}`;
+  const hash = (entry && entry.content_hash) || '';
+  if (hash) return `hash:${hash}`;
+  return `idx:${index}`;
 }
 
 function renderLibrary(entries) {
   if (!libraryList) return;
-  const filter = (librarySearch?.value || '').trim().toLowerCase();
-  const filtered = entries.filter(entry => {
-    if (!filter) return true;
-    const haystack = [
-      entry.title,
-      entry.url,
-      entry.file_path
-    ].filter(Boolean).join(' ').toLowerCase();
-    return haystack.includes(filter);
-  });
+  const renderToken = ++libraryRenderToken;
+  const filter = ((librarySearch && librarySearch.value) || '').trim().toLowerCase();
+  const refreshableOnly = Boolean(libraryRefreshableOnly && libraryRefreshableOnly.checked);
+  const sortMode = (librarySort && librarySort.value) || 'recent';
+  const base = (librarySortedViews && librarySortedViews[sortMode]) ? librarySortedViews[sortMode] : entries;
+  let secondaryIdSeq = 0;
 
-  libraryList.innerHTML = '';
-  if (libraryCount) {
-    libraryCount.textContent = `${filtered.length} / ${entries.length}`;
+  const view = [];
+  for (let i = 0; i < base.length; i += 1) {
+    const entry = base[i];
+    if (!entry) continue;
+    if (refreshableOnly && (entry.refreshable === false || entry.capture_mode === 'screenshot')) continue;
+    if (filter) {
+      const haystack = entry.__searchKey || '';
+      if (!haystack.includes(filter)) continue;
+    }
+    view.push(entry);
   }
 
-  if (!filtered.length) {
+  if (libraryCount) {
+    libraryCount.textContent = `${view.length} / ${entries.length}`;
+  }
+
+  if (!view.length) {
     const empty = document.createElement('div');
     empty.className = 'library-empty';
-    empty.textContent = 'No saved entries yet.';
-    libraryList.appendChild(empty);
+    empty.textContent = refreshableOnly ? 'No refreshable entries match this filter.' : 'No saved entries yet.';
+    libraryList.replaceChildren(empty);
     return;
   }
 
-  filtered.forEach((entry) => {
-    const item = document.createElement('div');
+  function buildLibraryItem(entry) {
+    const entryKey = entry.__key || getLibraryEntryKey(entry, 0);
+    const hasUrl = Boolean(entry.url);
+    const item = document.createElement('details');
     item.className = 'library-item';
+    item.dataset.key = entryKey;
+
+    const summary = document.createElement('summary');
 
     const meta = document.createElement('div');
     meta.className = 'library-meta';
-
     const title = document.createElement('div');
     title.className = 'library-title';
-    title.textContent = entry.title || entry.url || 'Untitled capture';
+    title.textContent = formatEntryTitle(entry);
 
     const subtitle = document.createElement('div');
     subtitle.className = 'library-subtitle';
     subtitle.textContent = formatEntryMeta(entry);
 
+    const subtitle2 = document.createElement('div');
+    subtitle2.className = 'library-subtitle';
+    subtitle2.textContent = formatEntryLine2(entry);
+
     meta.appendChild(title);
     meta.appendChild(subtitle);
+    meta.appendChild(subtitle2);
 
-    const actions = document.createElement('div');
-    actions.className = 'library-actions';
+    summary.appendChild(meta);
+    item.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'library-item-body';
+
+    const primary = document.createElement('div');
+    primary.className = 'library-actions';
 
     const copyMdBtn = document.createElement('button');
     copyMdBtn.type = 'button';
     copyMdBtn.className = 'btn-ghost btn-small';
-    copyMdBtn.textContent = 'Copy MD';
+    copyMdBtn.textContent = 'Copy File Path';
+    copyMdBtn.title = 'Copy Markdown file path';
     copyMdBtn.dataset.action = 'copy-md';
-    copyMdBtn.dataset.url = entry.url;
-
-    const copyAssetsBtn = document.createElement('button');
-    copyAssetsBtn.type = 'button';
-    copyAssetsBtn.className = 'btn-ghost btn-small';
-    copyAssetsBtn.textContent = 'Copy Assets';
-    copyAssetsBtn.dataset.action = 'copy-assets';
-    copyAssetsBtn.dataset.url = entry.url;
-    const assetCount = entry.asset_count ?? (entry.asset_paths ? entry.asset_paths.length : 0);
-    if (!assetCount) copyAssetsBtn.disabled = true;
+    copyMdBtn.dataset.key = entryKey;
 
     const copyAllBtn = document.createElement('button');
     copyAllBtn.type = 'button';
     copyAllBtn.className = 'btn-ghost btn-small';
-    copyAllBtn.textContent = 'Copy All';
+    copyAllBtn.textContent = 'Copy All Paths';
+    copyAllBtn.title = 'Copy Markdown + attachment file paths';
     copyAllBtn.dataset.action = 'copy-all';
-    copyAllBtn.dataset.url = entry.url;
+    copyAllBtn.dataset.key = entryKey;
 
     const openSourceBtn = document.createElement('button');
     openSourceBtn.type = 'button';
     openSourceBtn.className = 'btn-ghost btn-small';
-    openSourceBtn.textContent = 'Open Source';
+    openSourceBtn.textContent = 'Open Page';
     openSourceBtn.dataset.action = 'open-source';
-    openSourceBtn.dataset.url = entry.url;
+    openSourceBtn.dataset.key = entryKey;
+    if (!hasUrl) openSourceBtn.disabled = true;
 
     const revealBtn = document.createElement('button');
     revealBtn.type = 'button';
     revealBtn.className = 'btn-ghost btn-small';
-    revealBtn.textContent = 'Reveal File';
+    revealBtn.textContent = 'Reveal in Folder';
     revealBtn.dataset.action = 'reveal-file';
-    revealBtn.dataset.url = entry.url;
+    revealBtn.dataset.key = entryKey;
 
-    actions.appendChild(copyMdBtn);
-    actions.appendChild(copyAssetsBtn);
-    actions.appendChild(copyAllBtn);
-    actions.appendChild(openSourceBtn);
-    actions.appendChild(revealBtn);
+    primary.appendChild(copyMdBtn);
+    primary.appendChild(copyAllBtn);
+    primary.appendChild(openSourceBtn);
+    primary.appendChild(revealBtn);
 
-    item.appendChild(meta);
-    item.appendChild(actions);
-    libraryList.appendChild(item);
-  });
+    const moreRow = document.createElement('div');
+    moreRow.className = 'library-more-row';
+
+    const moreBtn = document.createElement('button');
+    moreBtn.type = 'button';
+    moreBtn.className = 'btn-ghost btn-small library-more-toggle';
+    moreBtn.textContent = 'More';
+    moreBtn.dataset.action = 'toggle-more';
+    moreBtn.dataset.key = entryKey;
+    moreBtn.setAttribute('aria-expanded', 'false');
+
+    const secondary = document.createElement('div');
+    secondary.className = 'library-secondary';
+    secondary.hidden = true;
+    const secondaryId = `librarySecondary_${renderToken}_${secondaryIdSeq++}`;
+    secondary.id = secondaryId;
+    moreBtn.setAttribute('aria-controls', secondaryId);
+
+    const copyAssetsBtn = document.createElement('button');
+    copyAssetsBtn.type = 'button';
+    copyAssetsBtn.className = 'btn-ghost btn-small';
+    copyAssetsBtn.textContent = 'Copy Attachments';
+    copyAssetsBtn.title = 'Copy attachment file paths';
+    copyAssetsBtn.dataset.action = 'copy-assets';
+    copyAssetsBtn.dataset.key = entryKey;
+    const assetCount = (entry.asset_count === null || entry.asset_count === undefined)
+      ? (entry.asset_paths ? entry.asset_paths.length : 0)
+      : entry.asset_count;
+    if (!assetCount) copyAssetsBtn.disabled = true;
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.className = 'btn-ghost btn-small';
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.dataset.action = 'refresh-entry';
+    refreshBtn.dataset.key = entryKey;
+    if (!hasUrl || entry.refreshable === false || entry.capture_mode === 'screenshot') refreshBtn.disabled = true;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn-ghost btn-small btn-danger btn-danger-wide';
+    removeBtn.textContent = 'Remove';
+    removeBtn.dataset.action = 'remove-entry';
+    removeBtn.dataset.key = entryKey;
+
+    secondary.appendChild(copyAssetsBtn);
+    secondary.appendChild(refreshBtn);
+    secondary.appendChild(removeBtn);
+
+    body.appendChild(primary);
+    moreRow.appendChild(moreBtn);
+    body.appendChild(moreRow);
+    body.appendChild(secondary);
+    item.appendChild(body);
+
+    return item;
+  }
+
+  // Render in small batches for large libraries to keep typing and scrolling responsive.
+  libraryList.replaceChildren();
+  const BATCH = view.length > 80 ? 24 : view.length;
+  let index = 0;
+  const step = () => {
+    if (renderToken !== libraryRenderToken) return;
+    const fragment = document.createDocumentFragment();
+    const end = Math.min(view.length, index + BATCH);
+    for (; index < end; index += 1) {
+      fragment.appendChild(buildLibraryItem(view[index]));
+    }
+    libraryList.appendChild(fragment);
+    if (index < view.length) {
+      requestAnimationFrame(step);
+    }
+  };
+  step();
 }
 
 async function refreshLibrary() {
   const entries = await getSavedUrls();
-  libraryEntries = entries.slice().sort((a, b) => {
-    const aTime = new Date(a.last_saved_at || 0).getTime();
-    const bTime = new Date(b.last_saved_at || 0).getTime();
-    return bTime - aTime;
-  });
+  libraryEntries = entries.slice();
+  buildLibraryCaches(libraryEntries);
   renderLibrary(libraryEntries);
+}
+
+function buildLibraryCaches(entries) {
+  libraryEntryMap = new Map();
+  // Precompute strings/timestamps so sorting and filtering stay fast as the library grows.
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (!entry) continue;
+    // Migration: older entries may have `source_url` but not `url`.
+    if (!entry.url && entry.source_url) entry.url = entry.source_url;
+    entry.__key = entry.__key || getLibraryEntryKey(entry, i);
+    entry.__sortTime = typeof entry.__sortTime === 'number' ? entry.__sortTime : new Date(entry.last_saved_at || 0).getTime();
+    entry.__sortTitle = entry.__sortTitle || formatEntryTitle(entry).toLowerCase();
+    entry.__sortDomain = entry.__sortDomain || String(entry.source_domain || '').toLowerCase();
+    entry.__searchKey = entry.__searchKey || [
+      entry.title,
+      entry.url,
+      entry.file_path,
+      entry.source_domain,
+      entry.capture_mode,
+      entry.last_saved_at
+    ].filter(Boolean).join(' ').toLowerCase();
+    if (entry.__key) libraryEntryMap.set(entry.__key, entry);
+  }
+  const byRecent = entries.slice().sort((a, b) => (b.__sortTime || 0) - (a.__sortTime || 0));
+  const byTitle = entries.slice().sort((a, b) => {
+    const cmp = (a.__sortTitle || '').localeCompare(b.__sortTitle || '');
+    return cmp !== 0 ? cmp : ((b.__sortTime || 0) - (a.__sortTime || 0));
+  });
+  const byDomain = entries.slice().sort((a, b) => {
+    const cmp = (a.__sortDomain || '').localeCompare(b.__sortDomain || '');
+    return cmp !== 0 ? cmp : (a.__sortTitle || '').localeCompare(b.__sortTitle || '');
+  });
+  librarySortedViews = { recent: byRecent, title: byTitle, domain: byDomain };
+}
+
+async function ensureLibraryLoaded(force = false) {
+  if (libraryLoaded && !force) return;
+  perfMark('kb:popup:library-load-start');
+  if (!IS_EXTENSION_RUNTIME) {
+    libraryEntries = PREVIEW_LIBRARY_ENTRIES.slice();
+    buildLibraryCaches(libraryEntries);
+    libraryLoaded = true;
+    renderLibrary(libraryEntries);
+    perfMark('kb:popup:library-load-end');
+    perfMeasure('library load', 'kb:popup:library-load-start', 'kb:popup:library-load-end');
+    return;
+  }
+  await refreshLibrary();
+  libraryLoaded = true;
+  perfMark('kb:popup:library-load-end');
+  perfMeasure('library load', 'kb:popup:library-load-start', 'kb:popup:library-load-end');
 }
 
 function saveEntry(entry) {
   chrome.runtime.sendMessage({ action: 'saveUrlEntry', entry }, (response) => {
-    if (response?.success) {
+    const lastError = chrome.runtime.lastError && chrome.runtime.lastError.message;
+    if (lastError) {
+      updateStatus(`Library save failed: ${lastError}`, 'error');
+      return;
+    }
+    if (response && response.success) {
       savedCountEl.textContent = String(response.count);
       refreshLibrary();
     }
@@ -1293,8 +1875,8 @@ function buildStudyPrompt(url, title, destinationKey, settings) {
     .concat(tableRules, formatRules, sourcesRules)
     .map(rule => `- ${rule}`);
 
-  const needs = (settings?.learningNeeds || []).slice();
-  const other = settings?.learningNeedsOther ? settings.learningNeedsOther : '';
+  const needs = (settings && settings.learningNeeds ? settings.learningNeeds : []).slice();
+  const other = (settings && settings.learningNeedsOther) ? settings.learningNeedsOther : '';
   if (other) needs.push(other);
   const needsLine = needs.length ? `- Learning needs: ${needs.join(', ')}` : '- Learning needs: none specified';
   const accommodations = buildAccessibilityGuidance(needs);
@@ -1432,7 +2014,7 @@ function captureVisibleTab(windowId) {
   return new Promise((resolve, reject) => {
     chrome.tabs.captureVisibleTab(windowId, { format: 'png' }, (dataUrl) => {
       if (chrome.runtime.lastError || !dataUrl) {
-        reject(new Error(chrome.runtime.lastError?.message || 'Screenshot failed'));
+        reject(new Error((chrome.runtime.lastError && chrome.runtime.lastError.message) || 'Screenshot failed'));
         return;
       }
       resolve(dataUrl);
@@ -1450,7 +2032,7 @@ function downloadUrl(url, filePath, overwrite) {
     }, (downloadId) => {
       resolve({
         success: Boolean(downloadId),
-        error: chrome.runtime.lastError?.message || null,
+        error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || null,
         downloadId: downloadId || null
       });
     });
@@ -1474,11 +2056,10 @@ async function downloadBinaryFile(buffer, filePath, overwrite, mimeType = 'appli
 }
 
 async function extractPdfTextFromArrayBuffer(arrayBuffer) {
-  if (!window.pdfjsLib || typeof window.pdfjsLib.getDocument !== 'function') {
+  try {
+    await ensurePdfJsLoaded();
+  } catch (error) {
     return null;
-  }
-  if (window.pdfjsLib.GlobalWorkerOptions && !window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('scripts/vendor/pdf.worker.min.js');
   }
   const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
   const pdf = await loadingTask.promise;
@@ -1539,12 +2120,16 @@ function docxHeadingLevel(paragraph) {
 function docxIsList(paragraph) {
   if (paragraph.getElementsByTagName('w:numPr').length) return true;
   const styleNode = paragraph.getElementsByTagName('w:pStyle')[0] || paragraph.getElementsByTagName('pStyle')[0];
-  const value = styleNode?.getAttribute('w:val') || styleNode?.getAttribute('val') || '';
+  const value = styleNode ? (styleNode.getAttribute('w:val') || styleNode.getAttribute('val') || '') : '';
   return /list/i.test(value);
 }
 
 async function extractDocxTextFromArrayBuffer(arrayBuffer) {
-  if (!window.JSZip) return null;
+  try {
+    await ensureJsZipLoaded();
+  } catch (error) {
+    return null;
+  }
   const zip = await window.JSZip.loadAsync(arrayBuffer);
   const file = zip.file('word/document.xml');
   if (!file) return null;
@@ -1598,7 +2183,11 @@ function extractPptxParagraphs(xml) {
 }
 
 async function extractPptxTextFromArrayBuffer(arrayBuffer) {
-  if (!window.JSZip) return null;
+  try {
+    await ensureJsZipLoaded();
+  } catch (error) {
+    return null;
+  }
   const zip = await window.JSZip.loadAsync(arrayBuffer);
   const slideFiles = Object.values(zip.files)
     .filter(file => file.name.startsWith('ppt/slides/slide') && file.name.endsWith('.xml'))
@@ -1643,7 +2232,7 @@ async function extractPptxTextFromArrayBuffer(arrayBuffer) {
     blocks.push(uniqueLines.map(line => `- ${line}`).join('\n'));
 
     const notes = notesMap.get(index);
-    if (notes?.length) {
+    if (notes && notes.length) {
       blocks.push('');
       blocks.push('### Notes');
       blocks.push('');
@@ -1768,7 +2357,11 @@ function buildXlsxMarkdownTable(sheetData, rowLimit, colLimit) {
 }
 
 async function extractXlsxTextFromArrayBuffer(arrayBuffer) {
-  if (!window.JSZip) return null;
+  try {
+    await ensureJsZipLoaded();
+  } catch (error) {
+    return null;
+  }
   const zip = await window.JSZip.loadAsync(arrayBuffer);
   const sharedStringsFile = zip.file('xl/sharedStrings.xml');
   const sharedStrings = sharedStringsFile ? parseSharedStrings(await sharedStringsFile.async('text')) : [];
@@ -2049,7 +2642,7 @@ async function handleAttachmentImport(file, settings) {
   refreshStats();
 }
 
-async function downloadAttachmentWrapperFromUrl({ url, settings, title, extension, captureModeOverride }) {
+async function downloadAttachmentWrapperFromUrl({ url, settings, title, extension, captureModeOverride = '', pageUrl }) {
   const urlHash = await shortHash(url.href);
   const pageFolders = getPageFolders(settings.baseFolder, url, urlHash);
   const attachmentName = extension === 'pdf' ? 'source.pdf' : `source.${extension}`;
@@ -2057,7 +2650,7 @@ async function downloadAttachmentWrapperFromUrl({ url, settings, title, extensio
   const mdPath = buildDownloadPath(settings.baseFolder, url, urlHash);
   const assetRelativePath = `${pageFolders.assetFolderName}/${attachmentName}`;
 
-  const headers = await fetchAssetHeaders(url.href);
+  const headers = await fetchAssetHeaders(url.href, pageUrl);
   const size = getAssetSizeFromHeaders(headers);
   if (size === null) {
     throw new Error('Attachment size unknown; download blocked for safety.');
@@ -2144,10 +2737,21 @@ async function downloadAttachmentWrapperFromUrl({ url, settings, title, extensio
 async function handlePdfUrl(tab, settings, pdfUrl, options = {}) {
   try {
     updateStatus('Fetching PDF...', 'info');
-    const resolvedUrl = new URL(pdfUrl, tab?.url || undefined);
+    const resolvedUrl = new URL(pdfUrl, (tab && tab.url) ? tab.url : undefined);
     if (!['http:', 'https:'].includes(resolvedUrl.protocol)) {
       throw new Error('PDF URL must be http/https');
     }
+
+    // Fail closed on unknown sizes and block private/loopback hosts unless same-origin with the page.
+    const pdfHeaders = await fetchAssetHeaders(resolvedUrl.href, (tab && tab.url) ? tab.url : '');
+    const pdfSize = getAssetSizeFromHeaders(pdfHeaders);
+    if (pdfSize === null) {
+      throw new Error('PDF size unknown; download blocked for safety.');
+    }
+    if (pdfSize > MAX_IMPORT_BYTES) {
+      throw new Error('PDF is too large to import safely.');
+    }
+
     let response;
     try {
       response = await fetch(resolvedUrl.href, { credentials: 'include', cache: 'no-store' });
@@ -2157,7 +2761,8 @@ async function handlePdfUrl(tab, settings, pdfUrl, options = {}) {
         settings,
         title: options.titleOverride || tab.title || resolvedUrl.hostname,
         extension: 'pdf',
-        captureModeOverride: options.captureMode === 'pdf-embedded' ? 'pdf-embedded-attachment' : undefined
+        captureModeOverride: options.captureMode === 'pdf-embedded' ? 'pdf-embedded-attachment' : undefined,
+        pageUrl: (tab && tab.url) ? tab.url : ''
       });
     }
     if (!response.ok) {
@@ -2166,7 +2771,8 @@ async function handlePdfUrl(tab, settings, pdfUrl, options = {}) {
         settings,
         title: options.titleOverride || tab.title || resolvedUrl.hostname,
         extension: 'pdf',
-        captureModeOverride: options.captureMode === 'pdf-embedded' ? 'pdf-embedded-attachment' : undefined
+        captureModeOverride: options.captureMode === 'pdf-embedded' ? 'pdf-embedded-attachment' : undefined,
+        pageUrl: (tab && tab.url) ? tab.url : ''
       });
     }
     const contentLength = Number(response.headers.get('content-length') || 0);
@@ -2276,10 +2882,21 @@ async function handleFileUrl(tab, settings, fileInfo, options = {}) {
   }
   try {
     updateStatus(`Fetching ${fileInfo.ext.toUpperCase()}...`, 'info');
-    const resolvedUrl = new URL(fileInfo.url, tab?.url || undefined);
+    const resolvedUrl = new URL(fileInfo.url, (tab && tab.url) ? tab.url : undefined);
     if (!['http:', 'https:'].includes(resolvedUrl.protocol)) {
       throw new Error('File URL must be http/https');
     }
+
+    // Fail closed on unknown sizes and block private/loopback hosts unless same-origin with the page.
+    const fileHeaders = await fetchAssetHeaders(resolvedUrl.href, (tab && tab.url) ? tab.url : '');
+    const fileSize = getAssetSizeFromHeaders(fileHeaders);
+    if (fileSize === null) {
+      throw new Error('Attachment size unknown; download blocked for safety.');
+    }
+    if (fileSize > MAX_IMPORT_BYTES) {
+      throw new Error('File is too large to import safely.');
+    }
+
     let response;
     try {
       response = await fetch(resolvedUrl.href, { credentials: 'include', cache: 'no-store' });
@@ -2288,7 +2905,8 @@ async function handleFileUrl(tab, settings, fileInfo, options = {}) {
         url: resolvedUrl,
         settings,
         title: options.titleOverride || tab.title || resolvedUrl.hostname,
-        extension: fileInfo.ext
+        extension: fileInfo.ext,
+        pageUrl: (tab && tab.url) ? tab.url : ''
       });
     }
     if (!response.ok) {
@@ -2296,7 +2914,8 @@ async function handleFileUrl(tab, settings, fileInfo, options = {}) {
         url: resolvedUrl,
         settings,
         title: options.titleOverride || tab.title || resolvedUrl.hostname,
-        extension: fileInfo.ext
+        extension: fileInfo.ext,
+        pageUrl: (tab && tab.url) ? tab.url : ''
       });
     }
     const contentLength = Number(response.headers.get('content-length') || 0);
@@ -2488,7 +3107,7 @@ const STUDY_DESTINATIONS = {
     researchTool: 'Search (Best or Pro Search) with academic sources',
     promptNote: 'Use Search mode only (not Research). Prefer academic sources and enable academic-focused search if offered.',
     searchModeHint: 'Use Search (Best/Pro Search). Do not use Research mode.',
-    outputGuard: 'Do NOT include raw attachment URLs. Refer to the screenshot as “Screenshot (attached)”.',
+    outputGuard: 'Do NOT include raw attachment URLs. Refer to the screenshot as \"Screenshot (attached)\".',
     formatRules: [
       'Use inline citations right after the sentence or table cell they support.'
     ],
@@ -2508,7 +3127,7 @@ const STUDY_DESTINATIONS = {
     researchTool: '',
     promptNote: 'If the interface offers browsing or citations, turn them on.',
     searchModeHint: '',
-    outputGuard: 'Avoid embedding attachment URLs; refer to the screenshot as “Screenshot (attached)”.',
+    outputGuard: 'Avoid embedding attachment URLs; refer to the screenshot as \"Screenshot (attached)\".',
     formatRules: [
       'Avoid nested lists and avoid code blocks inside lists.',
       'Keep formatting simple to reduce rendering glitches.'
@@ -2530,7 +3149,7 @@ const STUDY_DESTINATIONS = {
     researchTool: '',
     promptNote: 'Use any built-in tools for web research or math if available; cite sources.',
     searchModeHint: '',
-    outputGuard: 'Avoid embedding attachment URLs; refer to the screenshot as “Screenshot (attached)”.',
+    outputGuard: 'Avoid embedding attachment URLs; refer to the screenshot as \"Screenshot (attached)\".',
     formatRules: [
       'Use Markdown headings and bullet lists for structure.',
       'If inline citations are supported, place them immediately after the sentence they support.'
@@ -2556,7 +3175,7 @@ convertBtn.addEventListener('click', async () => {
     const settings = persistSettings();
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    const fileInfo = resolveFileUrl(tab?.url || '');
+    const fileInfo = resolveFileUrl((tab && tab.url) ? tab.url : '');
     if (!tab || !isHttpUrl(tab.url)) {
       if (!fileInfo || !fileInfo.url.startsWith('http')) {
         updateStatus('Use Import to capture local files.', 'warning');
@@ -2581,15 +3200,15 @@ convertBtn.addEventListener('click', async () => {
 
       const shouldFallback = settings.screenshotFallback;
       if (!response || !response.success) {
-        const embeddedCandidates = await getEmbeddedCandidates(response?.embeddedFiles);
+        const embeddedCandidates = await getEmbeddedCandidates((response && response.embeddedFiles) ? response.embeddedFiles : null, (tab && tab.url) ? tab.url : '');
         if (embeddedCandidates.length === 1) {
           const embeddedCandidate = embeddedCandidates[0];
           updateStatus(`Embedded ${embeddedCandidate.ext.toUpperCase()} detected. Extracting...`, 'info');
           const result = await handleFileUrl(tab, settings, embeddedCandidate, {
-            titleOverride: response?.title || response?.pageTitle || tab.title,
+            titleOverride: (response && (response.title || response.pageTitle)) || tab.title,
             captureMode: embeddedCandidate.ext === 'pdf' ? 'pdf-embedded' : undefined
           });
-          if (!result?.success && shouldFallback) {
+          if (!(result && result.success) && shouldFallback) {
             await handleScreenshotFallback(tab, settings, `Embedded ${embeddedCandidate.ext} capture failed`);
           }
           return;
@@ -2605,12 +3224,12 @@ convertBtn.addEventListener('click', async () => {
           convertBtn.disabled = false;
           return;
         }
-        const reason = response?.protectedContent ? 'Protected content' : response?.error;
+        const reason = (response && response.protectedContent) ? 'Protected content' : (response && response.error);
         await handleScreenshotFallback(tab, settings, reason);
         return;
       }
 
-      const embeddedCandidates = await getEmbeddedCandidates(response.embeddedFiles);
+      const embeddedCandidates = await getEmbeddedCandidates(response.embeddedFiles, (tab && tab.url) ? tab.url : '');
       if (embeddedCandidates.length === 1) {
         const embeddedCandidate = embeddedCandidates[0];
         updateStatus(`Embedded ${embeddedCandidate.ext.toUpperCase()} detected. Extracting...`, 'info');
@@ -2618,7 +3237,7 @@ convertBtn.addEventListener('click', async () => {
           titleOverride: response.title || response.pageTitle || tab.title,
           captureMode: embeddedCandidate.ext === 'pdf' ? 'pdf-embedded' : undefined
         });
-        if (!result?.success && shouldFallback) {
+        if (!(result && result.success) && shouldFallback) {
           await handleScreenshotFallback(tab, settings, `Embedded ${embeddedCandidate.ext} capture failed`);
         }
         return;
@@ -2704,7 +3323,7 @@ async function continueHtmlCapture(response, tab, settings) {
   refreshStats();
 }
 
-captureStudyBtn?.addEventListener('click', async () => {
+if (captureStudyBtn) captureStudyBtn.addEventListener('click', async () => {
   try {
     captureStudyBtn.disabled = true;
     updateStatus('Capturing a study snapshot...', 'info');
@@ -2720,7 +3339,7 @@ captureStudyBtn?.addEventListener('click', async () => {
 
     chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }, (dataUrl) => {
       if (chrome.runtime.lastError || !dataUrl) {
-        updateStatus(`Capture failed: ${chrome.runtime.lastError?.message || 'unknown error'}`, 'error');
+        updateStatus(`Capture failed: ${(chrome.runtime.lastError && chrome.runtime.lastError.message) || 'unknown error'}`, 'error');
         captureStudyBtn.disabled = false;
         return;
       }
@@ -2729,7 +3348,7 @@ captureStudyBtn?.addEventListener('click', async () => {
       studyContextUrl = tab.url || '';
       studyContextTitle = tab.title || '';
       studyPreview.src = dataUrl;
-      studyPromptText = buildStudyPrompt(studyContextUrl, studyContextTitle, destinationSelect?.value || 'perplexity', settings);
+      studyPromptText = buildStudyPrompt(studyContextUrl, studyContextTitle, (destinationSelect && destinationSelect.value) || 'perplexity', settings);
       if (studyPromptEl) {
         studyPromptEl.textContent = studyPromptText;
       }
@@ -2743,7 +3362,7 @@ captureStudyBtn?.addEventListener('click', async () => {
   }
 });
 
-copyPromptBtn?.addEventListener('click', async () => {
+if (copyPromptBtn) copyPromptBtn.addEventListener('click', async () => {
   if (!studyPromptText) {
     updateStatus('No study prompt yet. Capture a problem first.', 'warning');
     return;
@@ -2757,7 +3376,7 @@ copyPromptBtn?.addEventListener('click', async () => {
   }
 });
 
-copyImageBtn?.addEventListener('click', async () => {
+if (copyImageBtn) copyImageBtn.addEventListener('click', async () => {
   if (!studyImageUrl) {
     updateStatus('No screenshot yet. Capture a problem first.', 'warning');
     return;
@@ -2770,12 +3389,12 @@ copyImageBtn?.addEventListener('click', async () => {
   }
 });
 
-sendStudyBtn?.addEventListener('click', async () => {
+if (sendStudyBtn) sendStudyBtn.addEventListener('click', async () => {
   if (!studyPromptText || !studyImageUrl) {
     updateStatus('Capture a study pack first.', 'warning');
     return;
   }
-  const destination = STUDY_DESTINATIONS[destinationSelect?.value || 'perplexity'];
+  const destination = STUDY_DESTINATIONS[(destinationSelect && destinationSelect.value) || 'perplexity'];
   if (!destination) {
     updateStatus('Select a destination to continue.', 'warning');
     return;
@@ -2791,6 +3410,10 @@ sendStudyBtn?.addEventListener('click', async () => {
 });
 
 refreshAllBtn.addEventListener('click', async () => {
+  if (!IS_EXTENSION_RUNTIME) {
+    updateStatus('Preview mode: Refresh requires the extension runtime.', 'warning');
+    return;
+  }
   refreshAllBtn.disabled = true;
   updateStatus('Refreshing all saved sites...', 'info');
   const stats = await getSavedStats();
@@ -2803,6 +3426,13 @@ refreshAllBtn.addEventListener('click', async () => {
   setProgress(0, stats.count);
 
   chrome.runtime.sendMessage({ action: 'refreshAllSavedSites' }, (response) => {
+    const lastError = chrome.runtime.lastError && chrome.runtime.lastError.message;
+    if (lastError) {
+      updateStatus(`Refresh request failed: ${lastError}`, 'error');
+      refreshAllBtn.disabled = false;
+      resetProgress();
+      return;
+    }
     if (!response || !response.success) {
       updateStatus('Refresh request failed. Try again.', 'error');
       refreshAllBtn.disabled = false;
@@ -2812,38 +3442,40 @@ refreshAllBtn.addEventListener('click', async () => {
   });
 });
 
-chrome.runtime.onMessage.addListener((request) => {
-  if (request.action !== 'refreshProgress') return;
-  const progress = request.progress;
-  if (!progress) return;
+if (IS_EXTENSION_RUNTIME) {
+  chrome.runtime.onMessage.addListener((request) => {
+    if (request.action !== 'refreshProgress') return;
+    const progress = request.progress;
+    if (!progress) return;
 
-  if (progress.total === 0) {
-    updateStatus('No saved sites to refresh.', 'warning');
-    refreshAllBtn.disabled = false;
-    resetProgress();
-    refreshStats();
-    return;
-  }
-
-  setProgress(progress.completed, progress.total);
-  if (progress.success) {
-    let status = 'Updated';
-    if (progress.skipped) {
-      status = progress.reason === 'manual' ? 'Skipped manual capture' : 'Skipped unchanged';
+    if (progress.total === 0) {
+      updateStatus('No saved sites to refresh.', 'warning');
+      refreshAllBtn.disabled = false;
+      resetProgress();
+      refreshStats();
+      return;
     }
-    updateStatus(`${status}: ${progress.completed}/${progress.total}`, 'success');
-  } else {
-    updateStatus(`Failed on ${progress.completed}/${progress.total}: ${progress.error || 'unknown error'}`, 'error');
-  }
 
-  if (progress.completed === progress.total) {
-    updateStatus('Refresh complete.', 'success');
-    refreshAllBtn.disabled = false;
-    resetProgress();
-    refreshStats();
-    refreshLibrary();
-  }
-});
+    setProgress(progress.completed, progress.total);
+    if (progress.success) {
+      let status = 'Updated';
+      if (progress.skipped) {
+        status = progress.reason === 'manual' ? 'Skipped manual capture' : 'Skipped unchanged';
+      }
+      updateStatus(`${status}: ${progress.completed}/${progress.total}`, 'success');
+    } else {
+      updateStatus(`Failed on ${progress.completed}/${progress.total}: ${progress.error || 'unknown error'}`, 'error');
+    }
+
+    if (progress.completed === progress.total) {
+      updateStatus('Refresh complete.', 'success');
+      refreshAllBtn.disabled = false;
+      resetProgress();
+      refreshStats();
+      refreshLibrary();
+    }
+  });
+}
 
 copyBtn.addEventListener('click', async () => {
   if (!currentMarkdown) {
@@ -2859,7 +3491,7 @@ copyBtn.addEventListener('click', async () => {
   }
 });
 
-copyPathBtn?.addEventListener('click', async () => {
+if (copyPathBtn) copyPathBtn.addEventListener('click', async () => {
   if (!currentFilePath) {
     updateStatus('No saved file yet. Save a page first.', 'warning');
     return;
@@ -2872,7 +3504,7 @@ copyPathBtn?.addEventListener('click', async () => {
   }
 });
 
-copyAssetsBtn?.addEventListener('click', async () => {
+if (copyAssetsBtn) copyAssetsBtn.addEventListener('click', async () => {
   if (!currentAssetPaths.length) {
     updateStatus('No attachments found for this capture.', 'warning');
     return;
@@ -2885,7 +3517,7 @@ copyAssetsBtn?.addEventListener('click', async () => {
   }
 });
 
-copyAllPathsBtn?.addEventListener('click', async () => {
+if (copyAllPathsBtn) copyAllPathsBtn.addEventListener('click', async () => {
   if (!currentFilePath) {
     updateStatus('No saved file yet. Save a page first.', 'warning');
     return;
@@ -2922,14 +3554,14 @@ async function revealDownloadByEntry(entry) {
     chrome.downloads.search({ filenameRegex: regex }, (items) => resolve(items || []));
   });
   const match = result.sort((a, b) => (b.id || 0) - (a.id || 0))[0];
-  if (match?.id) {
+  if (match && match.id) {
     chrome.downloads.show(match.id);
     return true;
   }
   return false;
 }
 
-revealFileBtn?.addEventListener('click', async () => {
+if (revealFileBtn) revealFileBtn.addEventListener('click', async () => {
   try {
     const revealed = await revealDownloadByEntry({ file_path: currentFilePath, download_id: currentDownloadId });
     if (!revealed) {
@@ -2956,37 +3588,156 @@ skipUnchangedToggle.addEventListener('change', () => {
   persistSettings();
 });
 
-screenshotFallbackToggle?.addEventListener('change', () => {
+if (screenshotFallbackToggle) screenshotFallbackToggle.addEventListener('change', () => {
   persistSettings();
 });
 
-learningNeedsContainer?.addEventListener('change', () => {
+if (learningNeedsContainer) learningNeedsContainer.addEventListener('change', () => {
   toggleLearningNeedsOther();
   persistSettings();
 });
 
-learningNeedsOtherInput?.addEventListener('input', () => {
+if (learningNeedsOtherInput) learningNeedsOtherInput.addEventListener('input', () => {
   persistSettings();
 });
 
-destinationSelect?.addEventListener('change', () => {
+if (destinationSelect) destinationSelect.addEventListener('change', () => {
   persistSettings();
   if (studyContextUrl) {
     updateStudyPrompt();
   }
 });
 
-librarySearch?.addEventListener('input', () => {
+if (librarySearch) librarySearch.addEventListener('input', () => {
+  if (librarySearchTimer) clearTimeout(librarySearchTimer);
+  librarySearchTimer = setTimeout(() => {
+    renderLibrary(libraryEntries);
+  }, 120);
+});
+
+if (librarySort) librarySort.addEventListener('change', () => {
   renderLibrary(libraryEntries);
 });
 
-libraryList?.addEventListener('click', async (event) => {
-  const button = event.target.closest('button[data-action]');
-  if (!button) return;
-  const url = button.dataset.url;
-  const entry = libraryEntries.find(item => item.url === url);
-  if (!entry) return;
+if (libraryRefreshableOnly) libraryRefreshableOnly.addEventListener('change', () => {
+  renderLibrary(libraryEntries);
+});
 
+if (libraryPanel) libraryPanel.addEventListener('toggle', () => {
+  if (!libraryPanel.open) return;
+  if (optionsPanel && optionsPanel.open) optionsPanel.open = false;
+  ensureLibraryLoaded();
+});
+
+if (optionsPanel) optionsPanel.addEventListener('toggle', () => {
+  if (!optionsPanel.open) return;
+  if (libraryPanel && libraryPanel.open) libraryPanel.open = false;
+  loadDiagnostics();
+});
+
+if (copyPopupErrorBtn) copyPopupErrorBtn.addEventListener('click', async () => {
+  if (!IS_EXTENSION_RUNTIME) {
+    updateStatus('Preview mode: diagnostics require the extension runtime.', 'warning');
+    return;
+  }
+  chrome.storage.local.get({ [DIAGNOSTIC_KEYS.lastPopupError]: null }, async (data) => {
+    const value = data[DIAGNOSTIC_KEYS.lastPopupError];
+    if (!value) {
+      updateStatus('No popup error recorded.', 'info');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+      updateStatus('Popup error copied.', 'success');
+    } catch (error) {
+      updateStatus(`Copy failed: ${error.message}`, 'error');
+    }
+  });
+});
+
+if (copyBgErrorBtn) copyBgErrorBtn.addEventListener('click', async () => {
+  if (!IS_EXTENSION_RUNTIME) {
+    updateStatus('Preview mode: diagnostics require the extension runtime.', 'warning');
+    return;
+  }
+  chrome.storage.local.get({ [DIAGNOSTIC_KEYS.lastBackgroundError]: null }, async (data) => {
+    const value = data[DIAGNOSTIC_KEYS.lastBackgroundError];
+    if (!value) {
+      updateStatus('No background error recorded.', 'info');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(value, null, 2));
+      updateStatus('Background error copied.', 'success');
+    } catch (error) {
+      updateStatus(`Copy failed: ${error.message}`, 'error');
+    }
+  });
+});
+
+if (copyContextPromptBtn) copyContextPromptBtn.addEventListener('click', async () => {
+  if (!IS_EXTENSION_RUNTIME) {
+    updateStatus('Preview mode: diagnostics require the extension runtime.', 'warning');
+    return;
+  }
+  chrome.storage.local.get({ [DIAGNOSTIC_KEYS.lastContextPrompt]: null }, async (data) => {
+    const value = data[DIAGNOSTIC_KEYS.lastContextPrompt];
+    const text = value && typeof value.text === 'string' ? value.text : '';
+    if (!text) {
+      updateStatus('No context prompt recorded.', 'info');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      updateStatus('Context prompt copied.', 'success');
+    } catch (error) {
+      updateStatus(`Copy failed: ${error.message}`, 'error');
+    }
+  });
+});
+
+// Keep the Library list as a true accordion (only one open at a time),
+// without attaching per-item listeners (helps performance on large libraries).
+if (libraryList) libraryList.addEventListener('toggle', (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLDetailsElement)) return;
+  if (!target.classList.contains('library-item')) return;
+  if (target.open) {
+    if (libraryOpenItem && libraryOpenItem !== target) libraryOpenItem.open = false;
+    libraryOpenItem = target;
+    return;
+  }
+  // If the item is closing, also collapse its secondary actions panel.
+  const secondary = target.querySelector('.library-secondary');
+  if (secondary instanceof HTMLElement) secondary.hidden = true;
+  const moreBtn = target.querySelector('button[data-action="toggle-more"]');
+  if (moreBtn) {
+    moreBtn.setAttribute('aria-expanded', 'false');
+    moreBtn.textContent = 'More';
+  }
+  if (libraryOpenItem === target) libraryOpenItem = null;
+}, true);
+
+if (libraryList) libraryList.addEventListener('click', async (event) => {
+  const target = (event && event.target && event.target instanceof Element) ? event.target : null;
+  const button = target ? target.closest('button[data-action]') : null;
+  if (!(button instanceof HTMLButtonElement)) return;
+  if (button.dataset.action === 'toggle-more') {
+    const item = button.closest('details.library-item');
+    if (!item) return;
+    const secondary = item.querySelector('.library-secondary');
+    if (!secondary) return;
+    if (!(secondary instanceof HTMLElement)) return;
+    const willOpen = Boolean(secondary.hidden);
+    secondary.hidden = !willOpen;
+    button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    button.textContent = willOpen ? 'Less' : 'More';
+    return;
+  }
+
+  const key = button.dataset.key || '';
+  const entry = libraryEntryMap.get(key) || libraryEntries.find(item => item.__key === key || item.url === key);
+  if (!entry) return;
   const assetPaths = entry.asset_paths || [];
   try {
     if (button.dataset.action === 'copy-md') {
@@ -3005,11 +3756,70 @@ libraryList?.addEventListener('click', async (event) => {
       updateStatus('All paths copied.', 'success');
       return;
     }
+    if (button.dataset.action === 'refresh-entry') {
+      if (!IS_EXTENSION_RUNTIME) {
+        updateStatus('Preview mode: Refresh requires the extension runtime.', 'warning');
+        return;
+      }
+      button.disabled = true;
+      updateStatus('Refreshing entry...', 'info');
+      const response = await sendMessageWithTimeout({ action: 'refreshOneSavedSite', url: entry.url }, 30000);
+      button.disabled = false;
+      if (!response || !response.success) {
+        updateStatus(`Refresh failed: ${(response && response.error) || 'unknown error'}`, 'error');
+        return;
+      }
+      if (response.skipped) {
+        const reason = response.reason === 'unchanged' ? 'Skipped unchanged' : 'Skipped manual capture';
+        updateStatus(reason, 'success');
+      } else {
+        updateStatus('Entry refreshed.', 'success');
+      }
+      refreshStats();
+      refreshLibrary();
+      return;
+    }
+    if (button.dataset.action === 'remove-entry') {
+      if (!IS_EXTENSION_RUNTIME) {
+        updateStatus('Preview mode: Remove requires the extension runtime.', 'warning');
+        return;
+      }
+      const ok = confirm('Remove this entry from the KnowledgeBase Library?\n\nThis does not delete files from Downloads.');
+      if (!ok) return;
+      button.disabled = true;
+      updateStatus('Removing entry...', 'info');
+      const response = await sendMessageWithTimeout({
+        action: 'removeUrlEntry',
+        url: entry.url || '',
+        source_url: entry.source_url || '',
+        file_path: entry.file_path || '',
+        download_id: entry.download_id || null,
+        entry_key: entry.__key || ''
+      }, 15000);
+      button.disabled = false;
+      if (!response || !response.success) {
+        updateStatus(`Remove failed: ${(response && response.error) || 'Try again.'}`, 'error');
+        return;
+      }
+      savedCountEl.textContent = String((response.count === null || response.count === undefined) ? 0 : response.count);
+      updateStatus('Removed entry from library.', 'success');
+      refreshLibrary();
+      refreshStats();
+      return;
+    }
     if (button.dataset.action === 'open-source') {
+      if (!IS_EXTENSION_RUNTIME) {
+        updateStatus('Preview mode: Open Source requires the extension runtime.', 'warning');
+        return;
+      }
       chrome.tabs.create({ url: entry.url });
       updateStatus('Opened source page.', 'success');
     }
     if (button.dataset.action === 'reveal-file') {
+      if (!IS_EXTENSION_RUNTIME) {
+        updateStatus('Preview mode: Reveal requires the extension runtime.', 'warning');
+        return;
+      }
       const revealed = await revealDownloadByEntry(entry);
       if (!revealed) {
         chrome.downloads.showDefaultFolder();
@@ -3023,9 +3833,10 @@ libraryList?.addEventListener('click', async (event) => {
   }
 });
 
-embeddedList?.addEventListener('click', async (event) => {
-  const button = event.target.closest('button[data-action]');
-  if (!button || button.dataset.action !== 'save-embedded') return;
+if (embeddedList) embeddedList.addEventListener('click', async (event) => {
+  const target = (event && event.target && event.target instanceof Element) ? event.target : null;
+  const button = target ? target.closest('button[data-action]') : null;
+  if (!(button instanceof HTMLButtonElement) || button.dataset.action !== 'save-embedded') return;
   if (!pendingEmbedContext) return;
 
   const index = Number(button.dataset.index);
@@ -3035,16 +3846,16 @@ embeddedList?.addEventListener('click', async (event) => {
   updateStatus(`Saving ${candidate.ext.toUpperCase()}...`, 'info');
   showEmbeddedCard(false);
   const result = await handleFileUrl(pendingEmbedContext.tab, pendingEmbedContext.settings, candidate, {
-    titleOverride: pendingEmbedContext.response?.title || pendingEmbedContext.response?.pageTitle || pendingEmbedContext.tab.title,
+    titleOverride: (pendingEmbedContext.response && (pendingEmbedContext.response.title || pendingEmbedContext.response.pageTitle)) || pendingEmbedContext.tab.title,
     captureMode: candidate.ext === 'pdf' ? 'pdf-embedded' : undefined
   });
   clearEmbeddedPicker();
-  if (!result?.success && pendingEmbedContext.shouldFallback) {
+  if (!(result && result.success) && pendingEmbedContext.shouldFallback) {
     await handleScreenshotFallback(pendingEmbedContext.tab, pendingEmbedContext.settings, `Embedded ${candidate.ext} capture failed`);
   }
 });
 
-embeddedSaveAllBtn?.addEventListener('click', async () => {
+if (embeddedSaveAllBtn) embeddedSaveAllBtn.addEventListener('click', async () => {
   if (!pendingEmbedContext) return;
   const { candidates, tab, settings, response, shouldFallback } = pendingEmbedContext;
   embeddedSaveAllBtn.disabled = true;
@@ -3057,10 +3868,10 @@ embeddedSaveAllBtn?.addEventListener('click', async () => {
       const candidate = candidates[index];
       updateStatus(`Saving ${index + 1}/${candidates.length} documents...`, 'info');
       const result = await handleFileUrl(tab, settings, candidate, {
-        titleOverride: response?.title || response?.pageTitle || tab.title,
+        titleOverride: (response && (response.title || response.pageTitle)) || tab.title,
         captureMode: candidate.ext === 'pdf' ? 'pdf-embedded' : undefined
       });
-      if (!result?.success) failures += 1;
+      if (!(result && result.success)) failures += 1;
     }
 
     clearEmbeddedPicker();
@@ -3082,11 +3893,11 @@ embeddedSaveAllBtn?.addEventListener('click', async () => {
   }
 });
 
-embeddedSkipBtn?.addEventListener('click', async () => {
+if (embeddedSkipBtn) embeddedSkipBtn.addEventListener('click', async () => {
   if (!pendingEmbedContext) return;
   const { response, tab, settings, shouldFallback } = pendingEmbedContext;
   clearEmbeddedPicker();
-  if (response?.success) {
+  if (response && response.success) {
     await continueHtmlCapture(response, tab, settings);
     return;
   }
@@ -3097,15 +3908,16 @@ embeddedSkipBtn?.addEventListener('click', async () => {
   }
 });
 
-importFileBtn?.addEventListener('click', () => {
+if (importFileBtn) importFileBtn.addEventListener('click', () => {
   if (importFileInput) {
     importFileInput.value = '';
     importFileInput.click();
   }
 });
 
-importFileInput?.addEventListener('change', async (event) => {
-  const file = event.target.files && event.target.files[0];
+if (importFileInput) importFileInput.addEventListener('change', async (event) => {
+  const input = (event && event.target && event.target instanceof HTMLInputElement) ? event.target : importFileInput;
+  const file = input && input.files && input.files[0];
   if (!file) return;
   try {
     const settings = persistSettings();
@@ -3132,13 +3944,30 @@ importFileInput?.addEventListener('change', async (event) => {
   }
 });
 
-openDownloadsSettings.addEventListener('click', () => {
+if (openDownloadsSettings) openDownloadsSettings.addEventListener('click', () => {
+  if (!IS_EXTENSION_RUNTIME) {
+    updateStatus('Preview mode: Download settings requires the extension runtime.', 'warning');
+    return;
+  }
   chrome.tabs.create({ url: 'chrome://settings/downloads' });
 });
 
 window.addEventListener('DOMContentLoaded', async () => {
-  await loadSettings();
+  perfMark('kb:popup:domcontentloaded');
+  perfMeasure('startup (script -> DOMContentLoaded)', 'kb:popup:script-start', 'kb:popup:domcontentloaded');
+  loadSettings().then(() => {
+    perfMeasure('startup (script -> settings loaded)', 'kb:popup:script-start', 'kb:popup:settings-loaded');
+  });
   updateCurrentAssetButtons();
+
+  if (!IS_EXTENSION_RUNTIME) {
+    updateStatus('Preview mode: UI loaded without the Chrome extension runtime.', 'warning');
+    convertBtn.disabled = true;
+    refreshAllBtn.disabled = true;
+    captureStudyBtn.disabled = true;
+    setTimeout(refreshStats, 0);
+    return;
+  }
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs[0] && isHttpUrl(tabs[0].url)) {
@@ -3150,6 +3979,5 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  refreshStats();
-  refreshLibrary();
+  setTimeout(refreshStats, 0);
 });

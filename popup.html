@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KnowledgeBase</title>
+  <link rel="icon" type="image/png" href="icons/icon16.png">
   <link rel="stylesheet" href="styles/popup.css">
 </head>
 <body>
@@ -27,6 +28,10 @@
         <p id="statusText">Ready to capture the current page.</p>
       </section>
 
+      <div class="section-header">
+        <h2>Capture</h2>
+        <span class="section-subtext">Markdown + assets</span>
+      </div>
       <section class="primary-actions">
         <button id="convertBtn" class="btn-primary">
           <span class="btn-icon" aria-hidden="true">
@@ -41,6 +46,7 @@
           <span>Study Capture</span>
         </button>
       </section>
+      <p class="microcopy">Saves to Downloads/<span id="baseFolderLabel">KnowledgeBase</span>.</p>
 
       <div class="progress" id="progressBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true">
         <div class="progress-track">
@@ -135,6 +141,20 @@
             <label for="librarySearch">Search</label>
             <input id="librarySearch" type="text" placeholder="Search by title, URL, or path" />
           </div>
+          <div class="library-controls" role="group" aria-label="Library filters">
+            <div class="field">
+              <label for="librarySort">Sort</label>
+              <select id="librarySort">
+                <option value="recent">Recently saved</option>
+                <option value="title">Title (A-Z)</option>
+                <option value="domain">Domain (A-Z)</option>
+              </select>
+            </div>
+            <div class="field checkbox library-filter">
+              <input type="checkbox" id="libraryRefreshableOnly" />
+              <label for="libraryRefreshableOnly">Refreshable only</label>
+            </div>
+          </div>
           <div class="library-count">
             <span class="label">Entries</span>
             <span id="libraryCount">0 / 0</span>
@@ -143,7 +163,7 @@
         </div>
       </details>
 
-      <details class="panel">
+      <details class="panel" id="optionsPanel">
         <summary>Options</summary>
         <div class="panel-body">
           <div class="field">
@@ -196,13 +216,34 @@
               <span id="lastRefresh">-</span>
             </div>
           </div>
+          <details class="field diagnostics" id="diagnosticsPanel">
+            <summary>Diagnostics</summary>
+            <div class="diagnostics-body">
+              <div class="diagnostic-block" id="popupErrorBlock" hidden>
+                <div class="diagnostic-title">Last popup error</div>
+                <pre class="diagnostic-text" id="popupErrorText">-</pre>
+                <button type="button" class="btn-ghost btn-small" id="copyPopupErrorBtn">Copy error</button>
+              </div>
+              <div class="diagnostic-block" id="bgErrorBlock" hidden>
+                <div class="diagnostic-title">Last background error</div>
+                <pre class="diagnostic-text" id="bgErrorText">-</pre>
+                <button type="button" class="btn-ghost btn-small" id="copyBgErrorBtn">Copy error</button>
+              </div>
+              <div class="diagnostic-block" id="contextPromptBlock" hidden>
+                <div class="diagnostic-title">Last context prompt</div>
+                <pre class="diagnostic-text" id="contextPromptText">-</pre>
+                <div class="diagnostic-actions">
+                  <button type="button" class="btn-ghost btn-small" id="copyContextPromptBtn">Copy prompt</button>
+                </div>
+              </div>
+              <p class="field-hint diagnostics-hint" id="diagnosticsHint">If the extension crashes, this helps us pinpoint why.</p>
+            </div>
+          </details>
         </div>
       </details>
     </main>
   </div>
 
-  <script src="scripts/vendor/jszip.min.js"></script>
-  <script src="scripts/vendor/pdf.min.js"></script>
   <script src="scripts/popup.js"></script>
 </body>
 </html>

@@ -42,6 +42,10 @@ const REMOVE_SELECTORS = [
 const NOISE_PATTERN = /(nav|footer|sidebar|advert|ads|promo|subscribe|cookie|modal|popup|banner|share|social|comment|breadcrumb|newsletter|related)/i;
 let protectedContentDetected = false;
 const FILE_EXTENSIONS = ['pdf', 'docx', 'pptx', 'doc', 'ppt', 'xlsx', 'xls'];
+const EMBEDDED_URL_LIMIT = 120;
+const SHADOW_SCAN_NODE_LIMIT = 1500;
+const SHADOW_SCAN_TIME_BUDGET_MS = 40;
+const FILE_LINK_SELECTOR = FILE_EXTENSIONS.map(ext => `a[href*=".${ext}"]`).join(',');
 
 function extractMarkdownHeadings(markdown) {
   const headings = [];
@@ -56,11 +60,13 @@ function extractMarkdownHeadings(markdown) {
 }
 
 function getMetaContent(name) {
-  return document.querySelector(`meta[name="${name}"]`)?.content || '';
+  const node = /** @type {HTMLMetaElement|null} */ (document.querySelector(`meta[name="${name}"]`));
+  return (node && node.content) || '';
 }
 
 function getMetaProperty(prop) {
-  return document.querySelector(`meta[property="${prop}"]`)?.content || '';
+  const node = /** @type {HTMLMetaElement|null} */ (document.querySelector(`meta[property="${prop}"]`));
+  return (node && node.content) || '';
 }
 
 function extensionFromUrl(value) {
@@ -71,38 +77,63 @@ function extensionFromUrl(value) {
   return FILE_EXTENSIONS.includes(ext) ? ext : '';
 }
 
-function collectEmbeddedUrls() {
+function collectEmbeddedUrls(options = {}) {
+  const includeShadows = options.includeShadows === undefined
+    ? Boolean(document.querySelector('mosaic-book'))
+    : Boolean(options.includeShadows);
+  const maxUrls = Number.isFinite(options.maxUrls) ? options.maxUrls : EMBEDDED_URL_LIMIT;
+  const maxShadowNodes = Number.isFinite(options.maxShadowNodes) ? options.maxShadowNodes : SHADOW_SCAN_NODE_LIMIT;
+  const maxShadowMs = Number.isFinite(options.maxShadowMs) ? options.maxShadowMs : SHADOW_SCAN_TIME_BUDGET_MS;
+
   const urls = new Set();
+  const addUrl = (value) => {
+    if (!value) return;
+    if (urls.size >= maxUrls) return;
+    urls.add(value);
+  };
+
   const collectFromRoot = (root) => {
     root.querySelectorAll('iframe[src]').forEach((iframe) => {
       const src = iframe.getAttribute('src');
-      if (src) urls.add(src);
+      if (src) addUrl(src);
     });
     root.querySelectorAll('[data-ally-file-preview-url]').forEach((node) => {
       const value = node.getAttribute('data-ally-file-preview-url');
-      if (value) urls.add(value);
+      if (value) addUrl(value);
     });
     root.querySelectorAll('[data-ally-file-preview]').forEach((node) => {
       const value = node.getAttribute('data-ally-file-preview');
-      if (value) urls.add(value);
+      if (value) addUrl(value);
     });
-    root.querySelectorAll('a[href]').forEach((anchor) => {
-      const href = anchor.getAttribute('href');
-      if (href && extensionFromUrl(href)) urls.add(href);
-    });
-  };
-
-  const traverseShadows = (root) => {
-    root.querySelectorAll('*').forEach((node) => {
-      if (node.shadowRoot) {
-        collectFromRoot(node.shadowRoot);
-        traverseShadows(node.shadowRoot);
-      }
-    });
+    // Avoid scanning all anchors on large pages; only scan likely file links.
+    if (FILE_LINK_SELECTOR) {
+      root.querySelectorAll(FILE_LINK_SELECTOR).forEach((anchor) => {
+        const href = anchor.getAttribute('href');
+        if (href && extensionFromUrl(href)) addUrl(href);
+      });
+    }
   };
 
   collectFromRoot(document);
-  traverseShadows(document);
+  if (includeShadows && document.documentElement) {
+    const start = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    let scanned = 0;
+    const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ELEMENT);
+    /** @type {Node|null} */
+    let node = walker.currentNode;
+    while (node) {
+      scanned += 1;
+      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      if (scanned > maxShadowNodes) break;
+      if ((now - start) > maxShadowMs) break;
+      if (urls.size >= maxUrls) break;
+
+      if (node instanceof Element && node.shadowRoot) {
+        collectFromRoot(node.shadowRoot);
+      }
+      node = walker.nextNode();
+    }
+  }
 
   const pdfUrls = [];
   const fileUrls = [];
@@ -129,7 +160,7 @@ function collectEmbeddedUrls() {
 }
 
 function extractMetadata() {
-  const language = document.documentElement?.lang || getMetaProperty('og:locale') || '';
+  const language = (document.documentElement && document.documentElement.lang) || getMetaProperty('og:locale') || '';
   const siteName = getMetaProperty('og:site_name') || getMetaContent('application-name') || '';
   const description = getMetaContent('description') || getMetaProperty('og:description') || '';
   const author = getMetaContent('author') || getMetaProperty('article:author') || '';
@@ -284,7 +315,7 @@ function htmlToMarkdown(root, options = {}) {
       })
       .filter(candidate => candidate.url);
     candidates.sort((a, b) => b.score - a.score);
-    return candidates[0]?.url || '';
+    return (candidates[0] && candidates[0].url) || '';
   }
 
   function getImageSource(node) {
@@ -395,7 +426,7 @@ function htmlToMarkdown(root, options = {}) {
       case 'pre': {
         const codeNode = node.querySelector('code');
         const codeText = (codeNode ? codeNode.textContent : node.textContent) || '';
-        const languageMatch = codeNode?.className?.match(/language-([a-z0-9-_]+)/i);
+        const languageMatch = (codeNode && codeNode.className && codeNode.className.match(/language-([a-z0-9-_]+)/i)) || null;
         const language = languageMatch ? languageMatch[1] : '';
         const fence = language ? '```' + language + '\n' : '```\n';
         return '\n\n' + fence + codeText.trim() + '\n```\n\n';
@@ -471,7 +502,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const embeddedFiles = collectEmbeddedUrls();
 
     if (looksLikeMarkdown) {
-      const rawMarkdown = document.body?.innerText || '';
+      const rawMarkdown = (document.body && document.body.innerText) || '';
       const metadata = extractMetadata();
       sendResponse({
         success: Boolean(rawMarkdown.trim()),
@@ -518,7 +549,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     const metadata = extractMetadata();
-    const contentTitle = cleaned.querySelector('h1')?.textContent?.trim();
+    const h1 = cleaned.querySelector('h1');
+    const contentTitle = h1 && h1.textContent ? h1.textContent.trim() : '';
     const pageTitle = document.title || 'untitled-page';
     const title = contentTitle || pageTitle;
 

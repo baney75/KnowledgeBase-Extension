@@ -1,0 +1,5 @@
+Total messages: 3 (Errors: 0, Warnings: 0)
+
+[LOG] [KB perf] startup (script -> DOMContentLoaded): 2ms @ http://127.0.0.1:4314/scripts/popup.js:43
+[LOG] [KB perf] startup (script -> settings loaded): 3ms @ http://127.0.0.1:4314/scripts/popup.js:43
+[LOG] [KB perf] library load: 10ms @ http://127.0.0.1:4314/scripts/popup.js:43
